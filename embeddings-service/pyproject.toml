@@ -1,0 +1,21 @@
+[tool.poetry]
+name = "embeddings-service"
+version = "0.1.0"
+description = "Embedding service for generating embeddings from text"
+authors = ["Sam Broomfield"]
+readme = "README.md"
+
+
+[tool.poetry.dependencies]
+python = "^3.12"
+openai = "^1.40"
+fastapi = {version = "^0.112", extras = ["standard"]}
+tiktoken = "^0.7"
+result = "^0.17.0"
+aiokafka = "^0.11.0"
+
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
