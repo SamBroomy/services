@@ -3,8 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: embeddings-service
-    image: embeddings_service
+    container_name: embedding-service
+    image: kafka-embedding-service
     #restart: unless-stopped
     env_file:
       - .env

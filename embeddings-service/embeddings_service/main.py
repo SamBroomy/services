@@ -1,13 +1,12 @@
+import asyncio
 import json
 import logging
 import os
-from contextlib import asynccontextmanager
 from typing import Dict, List, Literal, Protocol, TypedDict
 
 import openai
 import tiktoken
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
-from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from result import Err, Ok, Result
 
@@ -18,7 +17,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 KAFKA_TOPIC_INPUT = os.getenv("KAFKA_TOPIC_INPUT", "embedding_requests")
 KAFKA_TOPIC_OUTPUT = os.getenv("KAFKA_TOPIC_OUTPUT", "embedding_results")
 
@@ -151,39 +150,43 @@ async def consume_messages():
         KAFKA_TOPIC_INPUT,
         bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
         group_id="embedding_service",
-        value_deserializer=lambda m: json.loads(m.decode("ascii")),
+        key_deserializer=lambda m: m.decode("ascii") if m is not None else None,
+        value_deserializer=lambda m: json.loads(m.decode("utf-8")),
     )
     producer = AIOKafkaProducer(
         bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
-        value_serializer=lambda v: json.dumps(v).encode("ascii"),
+        key_serializer=lambda v: v.encode("ascii") if v is not None else None,
+        value_serializer=lambda v: json.dumps(v).encode("utf-8"),
     )
 
     await consumer.start()
     await producer.start()
 
-    logger.info("WAITING FOR MESSAGES!")
+    logger.info("Started Kafka consumer and producer")
 
     try:
         async for msg in consumer:
-            logger.warning(f"Received message: {msg.value}")
+            logger.info(
+                f"Received message: {msg.topic}, {msg.partition}, {msg.offset}, {msg.key}, {msg.value}, {msg.timestamp}"
+            )
             try:
                 if (message := msg.value) is None:
-                    raise ValueError("Invalid message received")
+                    raise ValueError("Message does not contain a value")
                 if (text := message.get("text")) is None:
-                    raise ValueError("Text not provided")
+                    raise ValueError("Message does not contain a 'text' field")
                 if (model := message.get("model")) is None:
-                    raise ValueError("Model not provided")
-                if model not in EMBEDDING_MODELS:
-                    raise ValueError(
-                        f"Model '{model}' not supported, available models: {list(EMBEDDING_MODELS.keys())}"
-                    )
+                    raise ValueError("Message does not contain a 'model' field")
+
                 request = EmbeddingRequest(text=text, model=model)
-                match await process_embedding_request(request):
+                result = await process_embedding_request(request)
+                match result:
                     case Ok(response):
                         await producer.send(KAFKA_TOPIC_OUTPUT, response.model_dump())
                         logger.info(f"Sent response for message: {msg.value}")
-                    case Err(e):
-                        raise ValueError(f"Error processing message: {e}")
+                    case Err(error):
+                        error_response = {"error": error, "original_request": msg.value}
+                        await producer.send(KAFKA_TOPIC_OUTPUT, error_response)
+                        logger.error(f"Error processing message: {error}")
             except Exception as e:
                 error_response = {"error": str(e), "original_request": msg.value}
                 await producer.send(KAFKA_TOPIC_OUTPUT, error_response)
@@ -194,48 +197,9 @@ async def consume_messages():
         await producer.stop()
 
 
-@asynccontextmanager
-async def lifespan(_: FastAPI):
-    import asyncio
-
-    consumer_task = asyncio.create_task(consume_messages())
-    yield
-    consumer_task.cancel()
-    try:
-        await consumer_task
-    except asyncio.CancelledError:
-        logger.info("Consumer task was cancelled")
+async def main():
+    await consume_messages()
 
 
-app = FastAPI(lifespan=lifespan)
-
-
-@app.post("/embed", response_model=EmbeddingResponse)
-async def create_embedding(request: EmbeddingRequest):
-    if request.model not in EMBEDDING_MODELS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Model '{request.model}' not supported, available models: {list(EMBEDDING_MODELS.keys())}",
-        )
-
-    try:
-        model = EMBEDDING_MODELS[request.model]
-        result = await model.generate_embedding(request.text)
-
-        match result:
-            case Ok(embeddings):
-                return embeddings
-            case Err(error):
-                raise HTTPException(status_code=400, detail=error)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/models")
-async def list_models():
-    return {"available_models": list(EMBEDDING_MODELS.keys())}
-
-
-@app.get("/")
-async def root():
-    return {"message": "Welcome to the embeddings service!"}
+if __name__ == "__main__":
+    asyncio.run(main())

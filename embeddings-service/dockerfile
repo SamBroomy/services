@@ -45,5 +45,4 @@ RUN poetry run python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"
 WORKDIR $PROJECT_DIR
 COPY embeddings_service/ ./embeddings_service/
 
-# Set default command to run the application
-CMD ["poetry", "run", "uvicorn", "embeddings_service.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["poetry", "run", "python", "embeddings_service/main.py"]
