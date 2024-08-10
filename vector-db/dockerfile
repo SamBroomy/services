@@ -1,6 +1,5 @@
 FROM python:3.12-slim AS python-base
 
-
 # Set environment variables for Python, Pip, Poetry and project directories
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -37,17 +36,16 @@ RUN pip install uv==$UV_VERSION
 # Set working directory
 WORKDIR $PROJECT_DIR
 
-# Copy the common components
-COPY ../common /common
-# Install package dependencies with uv
-COPY embeddings-service/pyproject.toml ./
+# Copy the model-definitions project
+COPY ../model-definitions /model-definitions
 
+# Install package dependencies with uv
+COPY poetry.lock pyproject.toml ./
 RUN poetry export -f requirements.txt --output requirements.txt
 RUN poetry run uv pip install -r requirements.txt
 
-# Download the tiktoken model
-RUN poetry run python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"
+# Set working directory and copy package files
+WORKDIR $PROJECT_DIR
+COPY vector_db/ ./vector_db/
 
-COPY embeddings-service/embeddings_service/ ./embeddings_service/
-
-CMD ["poetry", "run", "python", "embeddings_service/main.py"]
+CMD ["poetry", "run", "python", "vector_db/main.py"]

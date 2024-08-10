@@ -1,12 +1,12 @@
 services:
   embeddings:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: embeddings-service/Dockerfile
     container_name: embedding-service
     image: kafka-embedding-service
     #restart: unless-stopped
     env_file:
       - .env
-    ports:
-      - "8000:8000"
+    # ports:
+    #   - "8000:8000"

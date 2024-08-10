@@ -1,13 +1,20 @@
 import asyncio
-import json
 import logging
 import os
-from typing import Dict, List, Literal, Protocol, TypedDict
+from typing import Dict, List, Literal, Protocol
 
 import openai
 import tiktoken
-from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
-from pydantic import BaseModel
+from aiokafka import AIOKafkaConsumer, AIOKafkaProducer, ConsumerRecord
+from microservices_common.kafka import KafkaProducerConsumerFactory, send_response
+from microservices_common.model_definitions import Error
+from microservices_common.model_definitions.embeddings import (
+    EmbeddingRequest,
+    EmbeddingResponse,
+    ModelInfoRequest,
+    ModelInfoResponse,
+    Usage,
+)
 from result import Err, Ok, Result
 
 logging.basicConfig(
@@ -17,38 +24,30 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
-KAFKA_TOPIC_INPUT = os.getenv("KAFKA_TOPIC_INPUT", "embedding_requests")
-KAFKA_TOPIC_OUTPUT = os.getenv("KAFKA_TOPIC_OUTPUT", "embedding_results")
 
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+GROUP_ID = "embeddings-service"
+KAFKA_TOPICS = {
+    "embedding_requests": "embedding_responses",
+    "model_info": "model_info_response",
+}
 
 Text = str | List[str]
 
 
-class EmbeddingRequest(BaseModel):
-    text: Text
-    model: str = "text-embedding-ada-002"
-
-
-class Usage(TypedDict):
-    prompt_tokens: int
-    """The number of tokens used by the prompt."""
-
-    total_tokens: int
-    """The total number of tokens used by the request."""
-
-
-class EmbeddingResponse(BaseModel):
-    embeddings: List[float] | List[List[float]]
+class EmbeddingModel(Protocol):
     model: str
     dimensions: int
-    usage: Usage
+    max_tokens: int
 
-
-class EmbeddingModel(Protocol):
     async def generate_embedding(
         self, text: Text
     ) -> Result[EmbeddingResponse, str]: ...
+
+    def model_info(self) -> ModelInfoResponse:
+        return ModelInfoResponse(
+            model=self.model, dimensions=self.dimensions, max_tokens=self.max_tokens
+        )
 
 
 class OpenAIEmbedding:
@@ -57,22 +56,13 @@ class OpenAIEmbedding:
         model: Literal[
             "text-embedding-3-small", "text-embedding-3-large", "text-embedding-ada-002"
         ],
+        dimensions: int,
     ):
-        # if not (azure_endpoint := os.getenv("AZURE_OPENAI_ENDPOINT")):
-        #     raise ValueError("AZURE_OPENAI_ENDPOINT environment variable is required")
-        # if not (azure_key := os.getenv("AZURE_OPENAI_API_KEY")):
-        #     raise ValueError("AZURE_OPENAI_API_KEY environment variable is required")
-        # if not (api_version := os.getenv("AZURE_OPENAI_API_VERSION")):
-        #     raise ValueError(
-        #         "AZURE_OPENAI_API_VERSION environment variable is required"
-        #     )
-        # self.client = openai.AzureOpenAI(
-        #     azure_endpoint=azure_endpoint, api_key=azure_key, api_version=api_version
-        # )
         # Deployment and model name are not normally the same, but at the moment the deployment names are the same as the model names. This may change in the future.
         self.client = openai.AzureOpenAI(azure_deployment=model)
         self.model = model
         self.max_tokens = 8192
+        self.dimensions = dimensions
         self.tokenizer = tiktoken.get_encoding("cl100k_base")
 
     async def generate_embedding(
@@ -90,8 +80,6 @@ class OpenAIEmbedding:
         response = self.client.embeddings.create(input=text, model=self.model)
         logger.debug("Model: '%s', Usage: %s", self.model, response.usage)
 
-        dimensions = len(response.data[0].embedding)
-
         if len(response.data) == 1:
             embeddings = response.data[0].embedding
         else:
@@ -106,13 +94,23 @@ class OpenAIEmbedding:
             EmbeddingResponse(
                 embeddings=embeddings,
                 model=response.model,
-                dimensions=dimensions,
+                dimensions=self.dimensions,
                 usage=usage,
             )
         )
 
+    def model_info(self) -> ModelInfoResponse:
+        return ModelInfoResponse(
+            model=self.model, dimensions=self.dimensions, max_tokens=self.max_tokens
+        )
+
 
 class DummyEmbedding:
+    def __init__(self):
+        self.model = "dummy"
+        self.dimensions = 1
+        self.max_tokens = 69
+
     async def generate_embedding(self, text: Text) -> Result[EmbeddingResponse, str]:
         # This is a dummy model that returns the length of the text as a single-element list
         return Ok(
@@ -124,11 +122,16 @@ class DummyEmbedding:
             )
         )
 
+    def model_info(self) -> ModelInfoResponse:
+        return ModelInfoResponse(
+            model=self.model, dimensions=self.dimensions, max_tokens=self.max_tokens
+        )
+
 
 EMBEDDING_MODELS: Dict[str, EmbeddingModel] = {
-    "text-embedding-ada-002": OpenAIEmbedding("text-embedding-ada-002"),
-    #'text-embedding-3-small': OpenAIEmbedding('text-embedding-3-small'),
-    "text-embedding-3-large": OpenAIEmbedding("text-embedding-3-large"),
+    "text-embedding-ada-002": OpenAIEmbedding("text-embedding-ada-002", 1_536),
+    #'text-embedding-3-small': OpenAIEmbedding('text-embedding-3-small', 1_536),
+    "text-embedding-3-large": OpenAIEmbedding("text-embedding-3-large", 3_072),
     "dummy": DummyEmbedding(),
     # Add more models here as they are implemented
 }
@@ -145,18 +148,61 @@ async def process_embedding_request(
     return await model.generate_embedding(request.text)
 
 
-async def consume_messages():
-    consumer = AIOKafkaConsumer(
-        KAFKA_TOPIC_INPUT,
+def process_model_info_request(
+    request: ModelInfoRequest,
+) -> Result[ModelInfoResponse, str]:
+    if request.model not in EMBEDDING_MODELS:
+        return Err(
+            f"Model '{request.model}' not supported, available models: {list(EMBEDDING_MODELS.keys())}"
+        )
+    model = EMBEDDING_MODELS[request.model]
+    return Ok(model.model_info())
+
+
+async def process_message(
+    msg: ConsumerRecord,
+) -> Result[EmbeddingResponse | ModelInfoResponse, str]:
+    topic: str = msg.topic
+
+    if (message := msg.value) is None:
+        return Err("Message does not contain a value, cannot process")
+
+    match topic:
+        case "embedding_requests":
+            request = EmbeddingRequest(**message)
+            return await process_embedding_request(request)
+        case "model_info":
+            request = ModelInfoRequest(**message)
+            return process_model_info_request(request)
+        case _:
+            return Err(f"Unknown topic: {topic}")
+
+
+async def consume_messages(consumer: AIOKafkaConsumer, producer: AIOKafkaProducer):
+    async for msg in consumer:
+        logger.info(
+            f"Received message: {msg.topic}, {msg.partition}, {msg.offset}, {msg.key}, {msg.value}, {msg.timestamp}"
+        )
+
+        try:
+            match await process_message(msg):
+                case Ok(response):
+                    ...
+                case Err(error):
+                    response = Error(error=error, topic=msg.topic, original_request=msg)
+                    logger.error(f"Error processing message: {error}")
+        except Exception as e:
+            response = Error(error=str(e), topic=msg.topic, original_request=msg)
+            logger.critical(f"Unexpected Error processing message: {e}")
+        await send_response(producer, KAFKA_TOPICS[msg.topic], response, msg.key)
+
+
+async def main():
+    logger.warning("Starting embeddings-service")
+    producer, consumer = KafkaProducerConsumerFactory.create_producer_consumer(
+        *KAFKA_TOPICS.keys(),
         bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
-        group_id="embedding_service",
-        key_deserializer=lambda m: m.decode("ascii") if m is not None else None,
-        value_deserializer=lambda m: json.loads(m.decode("utf-8")),
-    )
-    producer = AIOKafkaProducer(
-        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
-        key_serializer=lambda v: v.encode("ascii") if v is not None else None,
-        value_serializer=lambda v: json.dumps(v).encode("utf-8"),
+        group_id=GROUP_ID,
     )
 
     await consumer.start()
@@ -165,40 +211,11 @@ async def consume_messages():
     logger.info("Started Kafka consumer and producer")
 
     try:
-        async for msg in consumer:
-            logger.info(
-                f"Received message: {msg.topic}, {msg.partition}, {msg.offset}, {msg.key}, {msg.value}, {msg.timestamp}"
-            )
-            try:
-                if (message := msg.value) is None:
-                    raise ValueError("Message does not contain a value")
-                if (text := message.get("text")) is None:
-                    raise ValueError("Message does not contain a 'text' field")
-                if (model := message.get("model")) is None:
-                    raise ValueError("Message does not contain a 'model' field")
-
-                request = EmbeddingRequest(text=text, model=model)
-                result = await process_embedding_request(request)
-                match result:
-                    case Ok(response):
-                        await producer.send(KAFKA_TOPIC_OUTPUT, response.model_dump())
-                        logger.info(f"Sent response for message: {msg.value}")
-                    case Err(error):
-                        error_response = {"error": error, "original_request": msg.value}
-                        await producer.send(KAFKA_TOPIC_OUTPUT, error_response)
-                        logger.error(f"Error processing message: {error}")
-            except Exception as e:
-                error_response = {"error": str(e), "original_request": msg.value}
-                await producer.send(KAFKA_TOPIC_OUTPUT, error_response)
-                logger.error(f"Error processing message: {e}")
+        await consume_messages(consumer, producer)
     finally:
         logger.warning("Stopping consumer and producer")
         await consumer.stop()
         await producer.stop()
-
-
-async def main():
-    await consume_messages()
 
 
 if __name__ == "__main__":

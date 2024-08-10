@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "main-project"
+version = "0.1.0"
+description = "Main project that imports all submodules"
+authors = ["Sam Broomfield"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+microservices-common = { path = "common" }
+embeddings-service = { path = "embeddings-service" }
+vector-db = { path = "vector-db" }
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

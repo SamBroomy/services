@@ -1,19 +1,15 @@
 [tool.poetry]
-name = "embeddings-service"
+name = "microservices-common"
 version = "0.1.0"
-description = "Embedding service for generating embeddings from text"
+description = "Common code for microservices"
 authors = ["Sam Broomfield"]
 readme = "README.md"
 
 
 [tool.poetry.dependencies]
 python = "^3.12"
-openai = "^1.40"
-tiktoken = "^0.7"
-result = "^0.17.0"
+pydantic = "^2.8.2"
 aiokafka = "^0.11.0"
-microservices-common = { path = "../common" }
-
 
 [build-system]
 requires = ["poetry-core"]

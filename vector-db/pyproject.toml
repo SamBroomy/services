@@ -1,17 +1,17 @@
 [tool.poetry]
-name = "embeddings-service"
+name = "vector-db"
 version = "0.1.0"
-description = "Embedding service for generating embeddings from text"
+description = ""
 authors = ["Sam Broomfield"]
 readme = "README.md"
 
-
 [tool.poetry.dependencies]
 python = "^3.12"
-openai = "^1.40"
-tiktoken = "^0.7"
 result = "^0.17.0"
+openai = "^1.40.2"
 aiokafka = "^0.11.0"
+pydantic = "^2.8.2"
+qdrant-client = "^1.10.1"
 microservices-common = { path = "../common" }
 
 
