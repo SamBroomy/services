@@ -4,7 +4,6 @@ from pydantic import BaseModel
 
 class Error(BaseModel):
     error: str
-    topic: str
     original_request: dict | BaseModel | ConsumerRecord
 
 

@@ -1,13 +1,30 @@
 from typing import List, Literal, Optional
+from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from qdrant_client.models import Filter, SearchParams
 
 
 class InsertData(BaseModel):
-    id: str
+    id: int | str
     payload: dict
-    vector: list[float] | str
+    vector: Optional[list[float]] = None
+    field_to_embed: Optional[str] = None
+
+    @field_validator("id", mode="before")
+    def validate_id(cls, value):
+        if isinstance(value, int):
+            return value
+        try:
+            return str(UUID(value))
+        except ValueError:
+            raise ValueError("id must be a float or a valid UUID string")
+
+    # @field_serializer("id")
+    # def serialize_id(cls, value):
+    #     if isinstance(value, UUID):
+    #         return str(value)
+    #     return value
 
 
 class VectorDBInsertRequest(BaseModel):
@@ -41,7 +58,7 @@ class VectorDBSearchRequest(BaseModel):
 
 
 class VectorDBSearchResponse(BaseModel):
-    results: List[SearchResults]
+    results: list[list[SearchResults]]
 
 
 __all__ = [

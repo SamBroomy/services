@@ -2,11 +2,9 @@ from typing import List, TypedDict
 
 from pydantic import BaseModel
 
-Text = str | List[str]
-
 
 class EmbeddingRequest(BaseModel):
-    text: Text
+    text: List[str]
     model: str = "text-embedding-ada-002"
 
 
@@ -19,7 +17,7 @@ class Usage(TypedDict):
 
 
 class EmbeddingResponse(BaseModel):
-    embeddings: List[float] | List[List[float]]
+    embeddings: List[List[float]]
     model: str
     dimensions: int
     usage: Usage
