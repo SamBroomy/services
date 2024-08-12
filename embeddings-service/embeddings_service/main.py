@@ -1,12 +1,17 @@
 import asyncio
-import logging
-import os
 from typing import Dict, List, Literal, Protocol
 
 import openai
 import tiktoken
-from aiokafka import AIOKafkaConsumer, AIOKafkaProducer, ConsumerRecord
-from microservices_common.kafka import KafkaProducerConsumerFactory, send_response
+from microservices_common import setup_logger
+from microservices_common.kafka import (
+    KafkaConsumer,
+    KafkaFactory,
+    KafkaMessage,
+    KafkaProducer,
+    KafkaTopic,
+    KafkaTopicCategory,
+)
 from microservices_common.model_definitions import Error
 from microservices_common.model_definitions.embeddings import (
     EmbeddingRequest,
@@ -15,24 +20,13 @@ from microservices_common.model_definitions.embeddings import (
     ModelInfoResponse,
     Usage,
 )
-from result import Err, Ok, Result
+from pydantic import BaseModel
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler()],
-)
-logger = logging.getLogger(__name__)
-
-
-KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+KAFKA_TOPICS = KafkaTopicCategory.EMBEDDING
 GROUP_ID = "embeddings-service"
-KAFKA_TOPICS = {
-    "embedding_requests": "embedding_responses",
-    "model_info": "model_info_response",
-}
 
-Text = str | List[str]
+
+logger = setup_logger("embeddings-service")
 
 
 class EmbeddingModel(Protocol):
@@ -40,9 +34,7 @@ class EmbeddingModel(Protocol):
     dimensions: int
     max_tokens: int
 
-    async def generate_embedding(
-        self, text: Text
-    ) -> Result[EmbeddingResponse, str]: ...
+    async def generate_embedding(self, text: List[str]) -> EmbeddingResponse: ...
 
     def model_info(self) -> ModelInfoResponse:
         return ModelInfoResponse(
@@ -65,38 +57,28 @@ class OpenAIEmbedding:
         self.dimensions = dimensions
         self.tokenizer = tiktoken.get_encoding("cl100k_base")
 
-    async def generate_embedding(
-        self, text: str | List[str]
-    ) -> Result[EmbeddingResponse, str]:
-        if isinstance(text, str):
-            text = [text]
-
+    async def generate_embedding(self, text: List[str]) -> EmbeddingResponse:
         for i, t in enumerate(text):
             if len(self.tokenizer.encode(t)) > self.max_tokens:
-                return Err(
+                raise ValueError(
                     f"Text in index {i} is too long for model {self.model}. Received {len(self.tokenizer.encode(t))} tokens, max tokens: {self.max_tokens}"
                 )
 
         response = self.client.embeddings.create(input=text, model=self.model)
         logger.debug("Model: '%s', Usage: %s", self.model, response.usage)
 
-        if len(response.data) == 1:
-            embeddings = response.data[0].embedding
-        else:
-            embeddings = [d.embedding for d in response.data]
+        embeddings = [d.embedding for d in response.data]
 
         usage = Usage(
             prompt_tokens=response.usage.prompt_tokens,
             total_tokens=response.usage.total_tokens,
         )
 
-        return Ok(
-            EmbeddingResponse(
-                embeddings=embeddings,
-                model=response.model,
-                dimensions=self.dimensions,
-                usage=usage,
-            )
+        return EmbeddingResponse(
+            embeddings=embeddings,
+            model=response.model,
+            dimensions=self.dimensions,
+            usage=usage,
         )
 
     def model_info(self) -> ModelInfoResponse:
@@ -108,18 +90,20 @@ class OpenAIEmbedding:
 class DummyEmbedding:
     def __init__(self):
         self.model = "dummy"
-        self.dimensions = 1
+        self.dimensions = 100
         self.max_tokens = 69
 
-    async def generate_embedding(self, text: Text) -> Result[EmbeddingResponse, str]:
-        # This is a dummy model that returns the length of the text as a single-element list
-        return Ok(
-            EmbeddingResponse(
-                embeddings=[len(text)],
-                model="dummy",
-                dimensions=1,
-                usage=Usage(prompt_tokens=0, total_tokens=0),
-            )
+    async def generate_embedding(self, text: List[str]) -> EmbeddingResponse:
+        # This is a dummy model that returns random embeddings
+        import random
+
+        return EmbeddingResponse(
+            embeddings=[
+                [random.random() for _ in range(self.dimensions)] for _ in text
+            ],
+            model="dummy",
+            dimensions=self.dimensions,
+            usage=Usage(prompt_tokens=0, total_tokens=0),
         )
 
     def model_info(self) -> ModelInfoResponse:
@@ -139,9 +123,9 @@ EMBEDDING_MODELS: Dict[str, EmbeddingModel] = {
 
 async def process_embedding_request(
     request: EmbeddingRequest,
-) -> Result[EmbeddingResponse, str]:
+) -> EmbeddingResponse:
     if request.model not in EMBEDDING_MODELS:
-        return Err(
+        raise ValueError(
             f"Model '{request.model}' not supported, available models: {list(EMBEDDING_MODELS.keys())}"
         )
     model = EMBEDDING_MODELS[request.model]
@@ -150,72 +134,69 @@ async def process_embedding_request(
 
 def process_model_info_request(
     request: ModelInfoRequest,
-) -> Result[ModelInfoResponse, str]:
+) -> ModelInfoResponse:
     if request.model not in EMBEDDING_MODELS:
-        return Err(
+        raise ValueError(
             f"Model '{request.model}' not supported, available models: {list(EMBEDDING_MODELS.keys())}"
         )
-    model = EMBEDDING_MODELS[request.model]
-    return Ok(model.model_info())
+    return EMBEDDING_MODELS[request.model].model_info()
 
 
 async def process_message(
-    msg: ConsumerRecord,
-) -> Result[EmbeddingResponse | ModelInfoResponse, str]:
-    topic: str = msg.topic
-
+    msg: KafkaMessage,
+) -> EmbeddingResponse | ModelInfoResponse:
     if (message := msg.value) is None:
-        return Err("Message does not contain a value, cannot process")
+        raise ValueError("Message does not contain a value, cannot process")
+    if isinstance(message, BaseModel):
+        message = message.model_dump()
 
-    match topic:
-        case "embedding_requests":
+    match msg.topic:
+        case KafkaTopic.EMBEDDING_GENERATE:
+            logger.info(f"Processing embedding request: {message}")
             request = EmbeddingRequest(**message)
             return await process_embedding_request(request)
-        case "model_info":
+        case KafkaTopic.EMBEDDING_MODEL_INFO:
+            logger.info(f"Processing model info request: {message}")
             request = ModelInfoRequest(**message)
             return process_model_info_request(request)
         case _:
-            return Err(f"Unknown topic: {topic}")
+            raise ValueError(f"Unknown topic: {msg.topic}")
 
 
-async def consume_messages(consumer: AIOKafkaConsumer, producer: AIOKafkaProducer):
+async def consume_messages(consumer: KafkaConsumer, producer: KafkaProducer):
     async for msg in consumer:
-        logger.info(
-            f"Received message: {msg.topic}, {msg.partition}, {msg.offset}, {msg.key}, {msg.value}, {msg.timestamp}"
-        )
-
+        logger.info(f"Received message: {msg}")
         try:
-            match await process_message(msg):
-                case Ok(response):
-                    ...
-                case Err(error):
-                    response = Error(error=error, topic=msg.topic, original_request=msg)
-                    logger.error(f"Error processing message: {error}")
+            response = await process_message(msg)
+            logger.info(f"Processed message: {response}")
+            message = KafkaMessage(
+                topic=msg.topic, value=response, key=msg.key, headers=msg.headers
+            )
+            logger.info(f"Sending response: {message}")
+            await producer.send_response(message)
         except Exception as e:
-            response = Error(error=str(e), topic=msg.topic, original_request=msg)
-            logger.critical(f"Unexpected Error processing message: {e}")
-        await send_response(producer, KAFKA_TOPICS[msg.topic], response, msg.key)
+            logger.error(f"Error processing message: {e}")
+            response = Error(error=str(e), original_request=msg)
+            err_message = KafkaMessage(
+                topic=msg.topic, value=response, key=msg.key, headers=msg.headers
+            )
+            await producer.send_response(err_message)
+        logger.info("Response sent")
 
 
 async def main():
     logger.warning("Starting embeddings-service")
-    producer, consumer = KafkaProducerConsumerFactory.create_producer_consumer(
-        *KAFKA_TOPICS.keys(),
-        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+    producer, consumer = KafkaFactory.create_producer_consumer(
+        KAFKA_TOPICS,
         group_id=GROUP_ID,
     )
 
-    await consumer.start()
-    await producer.start()
-
-    logger.info("Started Kafka consumer and producer")
-
     try:
-        await consume_messages(consumer, producer)
+        async with consumer as consumer, producer as producer:
+            logger.info("Started Kafka consumer and producer")
+            await consume_messages(consumer, producer)
     finally:
         logger.warning("Stopping consumer and producer")
-        await consumer.stop()
-        await producer.stop()
 
 
 if __name__ == "__main__":
