@@ -36,16 +36,17 @@ RUN pip install uv==$UV_VERSION
 # Set working directory
 WORKDIR $PROJECT_DIR
 
-# Copy the model-definitions project
-COPY ../model-definitions /model-definitions
-
+# Copy the common components
+COPY ../common /common
 # Install package dependencies with uv
-COPY poetry.lock pyproject.toml ./
+COPY vector-db-service/pyproject.toml ./
+
 RUN poetry export -f requirements.txt --output requirements.txt
 RUN poetry run uv pip install -r requirements.txt
 
 # Set working directory and copy package files
 WORKDIR $PROJECT_DIR
-COPY vector_db/ ./vector_db/
+COPY vector-db-service/vector_db_service/ ./vector_db_service/
 
-CMD ["poetry", "run", "python", "vector_db/main.py"]
+
+CMD ["poetry", "run", "python", "vector_db_service/main.py"]

@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "vector-db"
+name = "vector-db-service"
 version = "0.1.0"
 description = ""
 authors = ["Sam Broomfield"]
