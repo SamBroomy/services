@@ -19,3 +19,6 @@ compose_logs:
 
 running:
     docker ps
+
+code2prompt:
+    code2prompt ./ -e lock,env,drawio --exclude-files env.yml --exclude-folders tests,qdrant_data

@@ -9,7 +9,7 @@ readme = "README.md"
 python = "^3.12"
 microservices-common = { path = "common" }
 embeddings-service = { path = "embeddings-service" }
-vector-db = { path = "vector-db" }
+vector-db-service = { path = "vector-db-service" }
 
 [build-system]
 requires = ["poetry-core"]

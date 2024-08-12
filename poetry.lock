@@ -236,10 +236,8 @@ files = []
 develop = false
 
 [package.dependencies]
-aiokafka = "^0.11.0"
 microservices-common = {path = "../common"}
 openai = "^1.40"
-result = "^0.17.0"
 tiktoken = "^0.7"
 
 [package.source]
@@ -551,6 +549,7 @@ develop = false
 [package.dependencies]
 aiokafka = "^0.11.0"
 pydantic = "^2.8.2"
+qdrant-client = "^1.10.1"
 
 [package.source]
 type = "directory"
@@ -1102,7 +1101,7 @@ socks = ["pysocks (>=1.5.6,!=1.5.7,<2.0)"]
 zstd = ["zstandard (>=0.18.0)"]
 
 [[package]]
-name = "vector-db"
+name = "vector-db-service"
 version = "0.1.0"
 description = ""
 optional = false
@@ -1120,9 +1119,9 @@ result = "^0.17.0"
 
 [package.source]
 type = "directory"
-url = "vector-db"
+url = "vector-db-service"
 
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.12"
-content-hash = "09581852dd449e8a991a3411a188f8f2fc8ac313f11c763e82808954aa7eb760"
+content-hash = "afb43dd04163aade5af03d6742f051b32695303aef97e8f6ef5ce34edef96fd7"
