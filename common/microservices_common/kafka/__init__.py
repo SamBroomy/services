@@ -3,6 +3,7 @@ from microservices_common.kafka.factory import (
     KafkaConsumer,
     KafkaFactory,
     KafkaMessage,
+    KafkaOneShot,
     KafkaProducer,
 )
 from microservices_common.kafka.topics import KafkaTopic, KafkaTopicCategory
@@ -15,4 +16,5 @@ __all__ = [
     "KafkaMessage",
     "KafkaProducer",
     "KafkaConsumer",
+    "KafkaOneShot",
 ]

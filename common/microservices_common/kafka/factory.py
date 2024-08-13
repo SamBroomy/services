@@ -1,6 +1,9 @@
+import asyncio
 import json
 import os
 from typing import Any, Dict, List, Optional, Union
+from uuid import UUID
+from uuid import uuid4 as uuid
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from pydantic import (
@@ -26,15 +29,19 @@ logger = setup_logger("kafka-factory")
 
 class KafkaAIOFactory:
     @staticmethod
-    def _custom_key_serializer(k: Optional[str]) -> Optional[bytes]:
-        return k.encode("utf-8") if k is not None else None
+    def _custom_key_serializer(k: Optional[str | int | UUID]) -> Optional[bytes]:
+        if k is None:
+            return None
+        if isinstance(k, UUID):
+            return k.bytes
+        return str(k).encode("utf-8")
 
     @staticmethod
     def _custom_value_serializer(v: Optional[dict | BaseModel]) -> Optional[bytes]:
         if v is None:
             return None
         if isinstance(v, BaseModel):
-            v = v.model_dump()  # type: ignore
+            return v.model_dump_json().encode("utf-8")
         return json.dumps(v).encode("utf-8")
 
     @classmethod
@@ -49,8 +56,17 @@ class KafkaAIOFactory:
         )
 
     @staticmethod
-    def _custom_key_deserializer(k: Optional[bytes]) -> Optional[str]:
-        return k.decode("utf-8") if k is not None else None
+    def _custom_key_deserializer(k: Optional[bytes]) -> Optional[str | int | UUID]:
+        if k is None:
+            return None
+        try:
+            return UUID(bytes=k)
+        except ValueError:
+            key = k.decode("utf-8")
+            try:
+                return int(key)
+            except ValueError:
+                return key
 
     @staticmethod
     def _custom_value_deserializer(v: Optional[bytes]) -> Optional[dict]:
@@ -59,16 +75,12 @@ class KafkaAIOFactory:
     @classmethod
     def create_consumer(
         cls,
-        topics: Union[KafkaTopic, List[KafkaTopic], KafkaTopicCategory],
+        topics: Union[str, list[str]],
         group_id: str,
         bootstrap_servers: str = KAFKA_BOOTSTRAP_SERVERS,
     ) -> AIOKafkaConsumer:
-        if isinstance(topics, KafkaTopic):
-            topics = [topics]
-        elif isinstance(topics, KafkaTopicCategory):
-            topic_names = KafkaConfig.get_category_topics(topics)
-        else:
-            topic_names = [KafkaConfig.get_topic(topic) for topic in topics]
+        if isinstance(topics, str):
+            topic_names = [topics]
 
         return AIOKafkaConsumer(
             *topic_names,
@@ -81,7 +93,7 @@ class KafkaAIOFactory:
     @classmethod
     def create_producer_consumer(
         cls,
-        topics: Union[KafkaTopic, List[KafkaTopic], KafkaTopicCategory],
+        topics: Union[str, list[str]],
         group_id: str,
         bootstrap_servers: str = KAFKA_BOOTSTRAP_SERVERS,
     ) -> tuple[AIOKafkaProducer, AIOKafkaConsumer]:
@@ -94,18 +106,21 @@ class KafkaAIOFactory:
 
 class KafkaMessage(BaseModel):
     topic: KafkaTopic = Field(
+        alias="kafka_topic",
         title="Kafka topic",
         description="The topic to send the message to. Can be a `KafkaTopic` or a string.",
     )
     value: Union[None, dict[str, Any], BaseModel] = Field(
         None,
+        alias="payload",
         title="Message value",
         description="The message value to send. Can be a `BaseModel` or a dictionary. Need at least a value or a key.",
     )
-    key: Optional[str] = Field(
+    key: Optional[str | int | UUID] = Field(
         None,
+        alias="message_key",
         title="Message key",
-        description="The message key to send. Can be a string or None. Need at least a value or a key.",
+        description="The message key to send. Can be a string, int or UUID. Need at least a value or a key.",
     )
     partition: Optional[int] = Field(None)
     timestamp_ms: Optional[int] = Field(None)
@@ -130,7 +145,7 @@ class KafkaMessage(BaseModel):
         value = v.get("value")
         if value is None or isinstance(value, (BaseModel, dict)):
             return v
-        raise ValueError("Value must be a BaseModel or a dictionary")
+        raise ValueError("Value must be a BaseModel, a dictionary or None")
 
     @field_validator("topic", mode="before")
     def validate_topic(cls, v: Union[str, KafkaTopic]) -> KafkaTopic:
@@ -247,6 +262,15 @@ class KafkaProducer:
 class KafkaConsumer:
     logger = setup_logger("kafka-consumer")
 
+    def _topic_to_string(
+        self, topic: KafkaTopic | KafkaTopicCategory | str
+    ) -> list[str]:
+        if isinstance(topic, KafkaTopic):
+            return [KafkaConfig.get_topic(topic)]
+        if isinstance(topic, KafkaTopicCategory):
+            return KafkaConfig.get_category_topics(topic)
+        return [topic]
+
     def __init__(
         self,
         topics: Union[
@@ -256,32 +280,14 @@ class KafkaConsumer:
         ],
         group_id: str,
     ):
-        if isinstance(topics, list):
-            new_topics: list[KafkaTopic] = []
-            for topic in topics:
-                if isinstance(topic, str):
-                    new_topics.append(KafkaTopic.from_string(topic))
-                elif isinstance(topic, KafkaTopicCategory):
-                    new_topics.extend(
-                        [
-                            KafkaTopic.from_string(t)
-                            for t in KafkaConfig.get_category_topics(topic)
-                        ]
-                    )
-                else:
-                    new_topics.append(topic)
-            topics = new_topics
-        elif isinstance(topics, KafkaTopic):
-            topics = [topics]
-        elif isinstance(topics, KafkaTopicCategory):
-            topics = [
-                KafkaTopic.from_string(t)
-                for t in KafkaConfig.get_category_topics(topics)
-            ]
-        elif isinstance(topics, str):
-            topics = [KafkaTopic.from_string(topics)]
-
-        self.consumer = KafkaAIOFactory.create_consumer(topics, group_id=group_id)
+        if not isinstance(topics, list):
+            tmp = [topics]
+        else:
+            tmp = topics
+        kafka_topics: list[str] = []
+        for topic in tmp:
+            kafka_topics.extend(self._topic_to_string(topic))
+        self.consumer = KafkaAIOFactory.create_consumer(kafka_topics, group_id=group_id)
 
     async def start(self):
         self.logger.info(f"Starting consumer [{self.consumer._client._client_id}]")
@@ -306,15 +312,79 @@ class KafkaConsumer:
         if self.consumer is None:
             raise ValueError("Consumer is not initialized")
         msg = await self.consumer.__anext__()
-        return KafkaMessage(
-            topic=msg.topic,
-            value=msg.value,
-            key=msg.key,
-            partition=msg.partition,
-            timestamp_ms=msg.timestamp,
-            headers=msg.headers,
-            offset=msg.offset,
+        return KafkaMessage.model_validate(msg, from_attributes=True)
+        #     topic=msg.topic,
+        #     value=msg.value,
+        #     key=msg.key,
+        #     partition=msg.partition,
+        #     timestamp_ms=msg.timestamp,
+        #     headers=msg.headers,
+        #     offset=msg.offset,
+        # )
+
+
+class KafkaOneShot:
+    """A class to send a message and wait for a response, used when you need to send a message and get a response from another service"""
+
+    logger = setup_logger("kafka-oneshot")
+
+    def __init__(self, topic: KafkaTopic, group_id: str):
+        producer, consumer = KafkaFactory.create_producer_response_consumer(
+            topic, group_id
         )
+        self.topic = topic
+        self.producer = producer
+        self.consumer = consumer
+        self.pending_requests: Dict[UUID, asyncio.Future] = {}
+
+    async def start(self):
+        await self.consumer.start()
+        await self.producer.start()
+        logger.info("Started Kafka one-shot producer and consumer")
+        asyncio.create_task(self._consume_responses())
+        logger.info("Started consuming responses")
+
+    async def stop(self):
+        await self.consumer.stop()
+        await self.producer.stop()
+        logger.info("Stopped Kafka one-shot producer and consumer")
+
+    async def __aenter__(self):
+        await self.start()
+        return self
+
+    async def __aexit__(self, _exc_type, _exc, _tb):
+        await self.stop()
+        return False
+
+    async def _consume_responses(self):
+        async for msg in self.consumer:
+            logger.info(f"Received response: {msg}")
+            if msg.key in self.pending_requests:
+                logger.info(f"Found pending request for key: {msg.key}")
+                self.pending_requests[msg.key].set_result(msg)
+                del self.pending_requests[msg.key]
+
+    async def call(self, payload: BaseModel, timeout: float = 30.0) -> KafkaMessage:
+        request_id = uuid()
+        kafka_message = KafkaMessage(
+            topic=self.topic,
+            value=payload,
+            key=request_id,
+        )
+
+        future = asyncio.Future()
+        self.pending_requests[request_id] = future
+
+        await self.producer.send_message(kafka_message)
+
+        try:
+            return await asyncio.wait_for(future, timeout)
+        except asyncio.TimeoutError:
+            del self.pending_requests[request_id]
+            raise TimeoutError(
+                f"Request to {kafka_message.topic} timed out after {timeout} seconds"
+            )
 
 
 class KafkaFactory:
@@ -343,7 +413,28 @@ class KafkaFactory:
         ],
         group_id: str,
     ) -> tuple[KafkaProducer, KafkaConsumer]:
+        """Create a producer and a consumer for the given topics and group_id"""
         return cls.create_producer(), cls.create_consumer(topics, group_id=group_id)
+
+    @classmethod
+    def create_producer_response_consumer(
+        cls,
+        topics: KafkaTopic,
+        group_id: str,
+    ) -> tuple[KafkaProducer, KafkaConsumer]:
+        """Create a producer and a consumer that listens to the response topic of the given topic"""
+        response_topic = KafkaConfig.get_response_topic(topics)
+        return cls.create_producer(), cls.create_consumer(
+            response_topic, group_id=group_id
+        )
+
+    @classmethod
+    def create_one_shot(
+        cls,
+        topic: KafkaTopic,
+        group_id: str,
+    ) -> KafkaOneShot:
+        return KafkaOneShot(topic, group_id)
 
 
 __all__ = ["KafkaFactory", "KafkaMessage", "KafkaProducer", "KafkaConsumer"]
