@@ -1,4 +1,5 @@
 import logging
+import os
 
 
 class CustomFormatter(logging.Formatter):
@@ -28,7 +29,7 @@ class CustomFormatter(logging.Formatter):
 def setup_logger(name: str) -> logging.Logger:
     # create logger with 'spam_application'
     logger = logging.getLogger(name)
-    logger.setLevel(logging.DEBUG)
+    LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
     # create console handler with a higher log level
     ch = logging.StreamHandler()
@@ -37,6 +38,11 @@ def setup_logger(name: str) -> logging.Logger:
     ch.setFormatter(CustomFormatter())
 
     logger.addHandler(ch)
+    try:
+        logger.setLevel(LOG_LEVEL)
+    except (ValueError, TypeError):
+        logger.warning(f"Invalid log level: {LOG_LEVEL}. Setting to INFO")
+        logger.setLevel(logging.INFO)
     return logger
 
 

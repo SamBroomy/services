@@ -1,10 +1,11 @@
+import os
 from typing import Dict, List
 
 from microservices_common.kafka.topics import KafkaTopic, KafkaTopicCategory
 
 
 class KafkaConfig:
-    TOPIC_PREFIX = "rag_pipeline"
+    TOPIC_PREFIX = os.getenv("KAFKA_TOPIC_PREFIX", "micro")
 
     @classmethod
     def get_topic(cls, topic: KafkaTopic) -> str:

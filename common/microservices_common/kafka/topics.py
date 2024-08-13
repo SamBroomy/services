@@ -46,22 +46,31 @@ class KafkaTopic(Enum):
     # Rerank topics
     RERANK = ("rerank", None)
 
-    def __init__(self, category: str, operation: Optional[str]):
+    def __init__(
+        self,
+        category: str,
+        operation: Optional[str],
+        # response: Optional[Literal["response", "error"]] = None,
+    ):
         self.category = KafkaTopicCategory(category)
         self.operation = operation
+        # self.response = response
 
     @classmethod
     def from_string(cls, s: str) -> "KafkaTopic":
         parts = s.split(".")
-        if len(parts) < 3:  # We expect at least rag_pipeline.category.operation
+        if (
+            len(parts) < 3 or len(parts) > 4
+        ):  # We expect at least rag_pipeline.category.operation.response
             raise ValueError(f"Invalid topic string: {s}")
 
-        category = parts[-2] if len(parts) > 2 else parts[-1]
-        operation = parts[-1] if len(parts) > 2 else None
+        category = parts[1]
+        operation = parts[2] if len(parts) >= 3 else None
+        # response_or_error = parts[-1] if parts[-1] in ["response", "error"] else None
 
         for topic in cls:
             if topic.category.value == category and topic.operation == operation:
-                return topic
+                return KafkaTopic(category, operation)
 
         raise ValueError(f"No KafkaTopic found for '{s}'")
 

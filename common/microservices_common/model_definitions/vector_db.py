@@ -13,7 +13,7 @@ from pydantic import (
 
 
 class InsertData(BaseModel):
-    id: int | UUID = Field(default_factory=uuid)
+    id: int | UUID = Field(default_factory=uuid, alias="id")
     payload: dict[str, Any]
     embeddings: Optional[list[float]] = Field(
         None, alias="vector", description="Vector to insert"
@@ -46,7 +46,7 @@ class InsertData(BaseModel):
                 raise ValidationError("id must be a float or a valid UUID string")
 
     @field_serializer("id")
-    def serialize_id(cls, value) -> str | int:
+    def serialize_id(self, value: int | UUID) -> str | int:
         if isinstance(value, UUID):
             return str(value)
         return value
