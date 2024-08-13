@@ -142,7 +142,7 @@ def process_model_info_request(
     return EMBEDDING_MODELS[request.model].model_info()
 
 
-async def process_message(
+async def handle_message(
     msg: KafkaMessage,
 ) -> EmbeddingResponse | ModelInfoResponse:
     if (message := msg.value) is None:
@@ -163,25 +163,29 @@ async def process_message(
             raise ValueError(f"Unknown topic: {msg.topic}")
 
 
+async def process_message(msg: KafkaMessage, producer: KafkaProducer):
+    try:
+        response = await handle_message(msg)
+        logger.info(f"Processed message: {response}")
+        message = KafkaMessage.model_construct(
+            topic=msg.topic, value=response, key=msg.key, headers=msg.headers
+        )
+        logger.info(f"Sending response: {message}")
+        await producer.send_response(message)
+    except Exception as e:
+        logger.error(f"Error processing message: {e}")
+        response = Error(error=str(e), original_request=msg)
+        err_message = KafkaMessage(
+            topic=msg.topic, value=response, key=msg.key, headers=msg.headers
+        )
+        await producer.send_response(err_message)
+    logger.info("Response sent")
+
+
 async def consume_messages(consumer: KafkaConsumer, producer: KafkaProducer):
     async for msg in consumer:
         logger.info(f"Received message: {msg}")
-        try:
-            response = await process_message(msg)
-            logger.info(f"Processed message: {response}")
-            message = KafkaMessage(
-                topic=msg.topic, value=response, key=msg.key, headers=msg.headers
-            )
-            logger.info(f"Sending response: {message}")
-            await producer.send_response(message)
-        except Exception as e:
-            logger.error(f"Error processing message: {e}")
-            response = Error(error=str(e), original_request=msg)
-            err_message = KafkaMessage(
-                topic=msg.topic, value=response, key=msg.key, headers=msg.headers
-            )
-            await producer.send_response(err_message)
-        logger.info("Response sent")
+        asyncio.create_task(process_message(msg, producer), name="process_message")
 
 
 async def main():
