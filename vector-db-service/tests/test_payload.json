@@ -1,0 +1,29 @@
+{
+    "collection_name": "test",
+    "data": [
+        {
+            "id": "e9620854-5262-4cbc-9d48-7e5268b0180a",
+            "payload": {
+                "text": "The cat sat on the mat",
+                "other": "based"
+            },
+            "field_to_embed": "text"
+        },
+        {
+            "id": 123456,
+            "payload": {
+                "text": "This is just some random text that I want to embed",
+                "other": "random"
+            },
+            "field_to_embed": "text"
+        },
+        {
+            "id": "e9620854-5262-4cbc-9d48-7e5268b0180b",
+            "payload": {
+                "text": "The quick brown fox jumps over the lazy dog",
+                "other": "based"
+            },
+            "field_to_embed": "text"
+        }
+    ]
+}

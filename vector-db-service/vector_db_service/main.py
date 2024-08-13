@@ -1,9 +1,15 @@
 import asyncio
 import os
-import uuid
 
-from aiokafka import AIOKafkaConsumer, AIOKafkaProducer, ConsumerRecord
-from microservices_common.kafka import KafkaProducerConsumerFactory, send_message
+from microservices_common import setup_logger
+from microservices_common.kafka import (
+    KafkaConsumer,
+    KafkaFactory,
+    KafkaMessage,
+    KafkaProducer,
+    KafkaTopic,
+    KafkaTopicCategory,
+)
 from microservices_common.model_definitions.embeddings import (
     EmbeddingRequest,
     EmbeddingResponse,
@@ -18,146 +24,91 @@ from microservices_common.model_definitions.vector_db import (
     VectorDBSearchRequest,
     VectorDBSearchResponse,
 )
-from microservices_common.utils import setup_logger
+from pydantic import BaseModel
 from qdrant_client import AsyncQdrantClient as QdrantClient
 from qdrant_client import models
 from qdrant_client.http.models import PointStruct
-from result import Err, Ok, Result
 
 # Kafka configuration
-KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+KAFKA_TOPICS = KafkaTopicCategory.VECTOR_DB
 GROUP_ID = "vector-db-service"
-
-KAFKA_LISTEN_TOPICS = ["vector_db_insert", "vector_db_search"]
-
-
-KAFKA_TOPICS = {
-    "vector_db_search": "vector_db_search_responses",
-    "vector_db_insert": "vector_db_insert_responses",
-    "embedding": "embedding_responses",
-    "model_info": "model_info_response",
-}
 
 # Qdrant configuration
 QDRANT_HOST = os.getenv("QDRANT_HOST", "qdrant:6333")
-
 
 # Logging configuration
 logger = setup_logger("vector-db-service")
 
 
-async def get_embedding(text: list[str]) -> Result[EmbeddingResponse, str]:
-    logger.info(f"Getting embeddings for {len(text)} items")
-    topic = "embedding"
-    request = EmbeddingRequest(text=text, model="text-embedding-ada-002")
-    id = str(uuid.uuid4())
-
-    (producer, consumer) = KafkaProducerConsumerFactory.create_producer_consumer(
-        KAFKA_TOPICS[topic],
-        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
-        group_id=GROUP_ID,
+async def get_embedding(request: EmbeddingRequest) -> EmbeddingResponse:
+    # request = EmbeddingRequest(text=text, model="text-embedding-ada-002")
+    logger.info(f"Getting embeddings for {len(request.text)} items")
+    kafak_one_shot = KafkaFactory.create_one_shot(
+        KafkaTopic.EMBEDDING_GENERATE,
+        GROUP_ID,
     )
-    await consumer.start()
-    await producer.start()
-    logger.info("Started Kafka consumer and producer")
 
-    try:
-        logger.info(f"Sending request: {request}")
-        await send_message(producer, topic, request, id)
-        logger.info("Waiting for response")
-        # Need timeout here to avoid infinite loop?
-        async with asyncio.timeout(5):
-            async for msg in consumer:  # Getone? instead.
-                logger.info(f"Received message: {msg}")
-                if msg.key != id:
-                    logger.info(f"Message key does not match: {msg.key} != {id}")
-                    continue
-                if (message := msg.value) is None:
-                    return Err("Message does not contain a value")
-                logger.info(f"Received response: {message}")
-                return Ok(EmbeddingResponse(**message))
-    except asyncio.TimeoutError:
-        logger.critical("Timed out waiting for embedding")
-        err = Err("TIMEOUT - Embedding not found")
-    finally:
-        await consumer.stop()
-        await producer.stop()
-        logger.info("Stopped Kafka consumer and producer")
-        err = Err("Embedding not found")
-    return err
+    async with kafak_one_shot:
+        response = (
+            await kafak_one_shot.call(
+                request,
+                timeout=5,
+            )
+        ).value
+        logger.info(f"Received response: {response}")
+        return EmbeddingResponse.model_validate(response)
 
 
-async def get_model_info(model: str) -> Result[ModelInfoResponse, str]:
-    logger.info(f"Getting model info for: {model}")
-    topic = "model_info"
-    request = ModelInfoRequest(model=model)
-    id = str(uuid.uuid4())
-
-    (producer, consumer) = KafkaProducerConsumerFactory.create_producer_consumer(
-        KAFKA_TOPICS[topic],
-        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
-        group_id=GROUP_ID,
+async def get_model_info(model: ModelInfoRequest) -> ModelInfoResponse:
+    # request = ModelInfoRequest(model=model)
+    logger.info(f"Getting model info for: {model.model}")
+    kafka_one_shot = KafkaFactory.create_one_shot(
+        KafkaTopic.EMBEDDING_MODEL_INFO,
+        GROUP_ID,
     )
-    await consumer.start()
-    await producer.start()
-    logger.info("Started Kafka consumer and producer")
-    err: str = ""
 
-    try:
-        logger.info(f"Sending request: {request}")
-        await send_message(producer, topic, request, id)
-        logger.info("Waiting for response")
-        # Need timeout here to avoid infinite loop?
-        async with asyncio.timeout(5):
-            async for msg in consumer:
-                logger.info(f"Received message: {msg}")
-                if msg.key != id:
-                    logger.info(f"Message key does not match: {msg.key} != {id}")
-                    continue
-                if (message := msg.value) is None:
-                    return Err("Message does not contain a value")
-                logger.info(f"Received response: {message}")
-                return Ok(ModelInfoResponse(**message))
-    except asyncio.TimeoutError:
-        logger.critical("Timed out waiting for model info")
-        err = f"Timeout - {err}"
-    finally:
-        await consumer.stop()
-        await producer.stop()
-        logger.info("Stopped Kafka consumer and producer")
-        err = f"Model info not found - {err}"
-    return Err(err)
+    async with kafka_one_shot:
+        response = (
+            await kafka_one_shot.call(
+                model,
+                timeout=5,
+            )
+        ).value
+        logger.info(f"Received response: {response}")
+        return ModelInfoResponse.model_validate(response)
 
 
 async def process_insert_request(
     request: VectorDBInsertRequest,
     client: QdrantClient,
-) -> Result[VectorDBInsertResponse, str]:
+) -> VectorDBInsertResponse:
     if not (await client.collection_exists(request.collection_name)):
         logger.info(f"Creating collection: {request.collection_name}")
-        # client.delete_collection("map-maker")
-        match await get_model_info(request.model):
-            case Ok(model_info):
-                await client.create_collection(
-                    collection_name=request.collection_name,
-                    vectors_config=models.VectorParams(
-                        size=model_info.dimensions,
-                        distance=models.Distance.COSINE,
-                    ),
-                )
-            case Err(error):
-                return Err("Unable to create collection: " + error)
-    data = request.data
-    if any([d.vector is None for d in data]):
-        text: list[str] = [d.payload[d.field_to_embed] for d in data]
-        match await get_embedding(text):
-            case Ok(embeddings):
-                for d, e in zip(data, embeddings.embeddings):
-                    d.vector = e
-            case Err(error):
-                return Err("Unable to get embeddings: " + error)
-        logger.info(f"Got embeddings for {len(data)} items")
-    points = [PointStruct(id=d.id, vector=d.vector, payload=d.payload) for d in data]  # type: ignore
+        model_info = await get_model_info(ModelInfoRequest(model=request.model))
+
+        if not (
+            await client.create_collection(
+                collection_name=request.collection_name,
+                vectors_config=models.VectorParams(
+                    size=model_info.dimensions,
+                    distance=models.Distance.COSINE,
+                ),
+            )
+        ):
+            raise ValueError(f"Failed to create collection: {request.collection_name}")
+
+    if request.needs_embeddings():
+        text = request.get_text_to_embed()
+
+        embeddings = await get_embedding(
+            EmbeddingRequest(text=text, model=request.model)
+        )
+        request.update_embeddings(embeddings.embeddings)
+
+    points = [
+        PointStruct(**d.model_dump(by_alias=True, exclude={"field_to_embed"}))
+        for d in request.data
+    ]
     logger.info(
         f"Uploading {len(points)} points to collection: {request.collection_name}"
     )
@@ -167,29 +118,35 @@ async def process_insert_request(
         wait=True,
     )
     logger.info("Uploaded points!")
-    return Ok(VectorDBInsertResponse(status="success"))
+    return VectorDBInsertResponse(status="success")
 
 
 async def process_search_request(
     request: VectorDBSearchRequest,
     client: QdrantClient,
-) -> Result[VectorDBSearchResponse, str]:
+) -> VectorDBSearchResponse:
     if not (await client.collection_exists(request.collection_name)):
-        logger.error(f"Collection does not exist: {request.collection_name}")
-        return Err(f"Collection does not exist: {request.collection_name}")
-    if any([isinstance(q, str) for q in request.query]):
-        logger.info(f"Getting embeddings for {len(request.query)} items")
-        match await get_embedding(request.query):  # type: ignore
-            case Ok(embeddings):
-                request.query = embeddings.embeddings
-            case Err(error):
-                return Err("Unable to get embeddings: " + error)
+        raise ValueError(f"Collection does not exist: {request.collection_name}")
+
+    if request.needs_embeddings():
+        text = request.get_text_to_embed()
+
+        embeddings = await get_embedding(
+            EmbeddingRequest(text=text, model=request.model)
+        )
+        request.update_embeddings(embeddings.embeddings)
+
+    # TODO: Implement filter parsing
+    # filter = parse_filter(request.filter) if request.filter else None
+    # TODO: Implement params parsing
+    # params = parse_params(request.params) if request.params else None
+
     logger.info(
-        f"Searching collection: {request.collection_name} - number of queries: {len(request.query)}"
+        f"Searching collection: {request.collection_name} - number of queries: {len(request.data)}"
     )
     search_requests = [
         models.SearchRequest(
-            vector=q,  # type: ignore
+            vector=d.query_embeddings,  # type: ignore
             filter=request.filter,  # type: ignore
             params=request.params,  # type: ignore
             limit=request.limit,
@@ -197,61 +154,69 @@ async def process_search_request(
             with_vector=request.with_vector,
             score_threshold=request.score_threshold,
         )
-        for q in request.query
+        for d in request.data
     ]
     results = await client.search_batch(
         collection_name=request.collection_name,
         requests=search_requests,
     )
-    results = [[SearchResults(**r.model_dump()) for r in res] for res in results]
+    results = [[SearchResults.model_validate(r) for r in res] for res in results]
     logger.info(f"Found {len(results)} results")
-    return Ok(VectorDBSearchResponse(results=results))
+    return VectorDBSearchResponse(results=results)
 
 
-async def process_message(
-    msg: ConsumerRecord,
+async def handle_message(
+    msg: KafkaMessage,
     qdrant_client: QdrantClient,
-) -> Result[VectorDBInsertResponse | VectorDBSearchResponse, str]:
-    topic: str = msg.topic
-
+) -> VectorDBInsertResponse | VectorDBSearchResponse:
     if (message := msg.value) is None:
-        return Err("Message does not contain a value, cannot process")
+        raise ValueError("Message does not contain a value, cannot process")
+    if isinstance(message, BaseModel):
+        message = message.model_dump()
 
-    match topic:
-        case "vector_db_insert":
+    match msg.topic:
+        case KafkaTopic.VECTOR_DB_INSERT:
             logger.info(f"Processing insert request: {message}")
             request = VectorDBInsertRequest(**message)
             return await process_insert_request(request, qdrant_client)
-        case "vector_db_search":
+        case KafkaTopic.VECTOR_DB_SEARCH:
             logger.info(f"Processing search request: {message}")
             request = VectorDBSearchRequest(**message)
             return await process_search_request(request, qdrant_client)
         case _:
-            return Err(f"Unknown topic: {topic}")
+            raise ValueError(f"Unknown topic: {msg.topic}")
+
+
+async def process_message(
+    msg: KafkaMessage, producer: KafkaProducer, qdrant_client: QdrantClient
+):
+    try:
+        response = await handle_message(msg, qdrant_client)
+        logger.info(f"Processed message: {response}")
+        message = KafkaMessage(
+            topic=msg.topic, value=response, key=msg.key, headers=msg.headers
+        )
+        logger.info(f"Sending response: {message}")
+        await producer.send_response(message)
+    except Exception as e:
+        logger.error(f"Error processing message: {e}")
+        response = Error(error=str(e), original_request=msg)
+        err_message = KafkaMessage(
+            topic=msg.topic, value=response, key=msg.key, headers=msg.headers
+        )
+        await producer.send_response(err_message)
+    logger.info("Response sent")
 
 
 async def consume_messages(
-    consumer: AIOKafkaConsumer, producer: AIOKafkaProducer, qdrant_client: QdrantClient
+    consumer: KafkaConsumer, producer: KafkaProducer, qdrant_client: QdrantClient
 ):
     async for msg in consumer:
-        logger.info(
-            f"Received message: {msg.topic}, {msg.partition}, {msg.offset}, {msg.key}, {msg.value}, {msg.timestamp}"
+        logger.info(f"Received message: {msg}")
+
+        asyncio.create_task(
+            process_message(msg, producer, qdrant_client), name="process_message"
         )
-        try:
-            match await process_message(msg, qdrant_client):
-                case Ok(response):
-                    logger.info(f"Processed message: {response}")
-                case Err(error):
-                    response = Error(error=error, topic=msg.topic, original_request=msg)
-                    logger.error(f"Error processing message: {error}")
-        except Exception as e:
-            response = Error(error=str(e), topic=msg.topic, original_request=msg)
-            logger.critical(
-                f"Unexpected Error processing message: {e}", exc_info=e, stack_info=True
-            )
-        if (topic := KAFKA_TOPICS.get(msg.topic)) is not None:
-            logger.info(f"Sending response: {response}")
-            await send_message(producer, topic, response, msg.key)
 
 
 async def main():
@@ -259,22 +224,17 @@ async def main():
     (host, port) = QDRANT_HOST.split(":")
     qdrant_client = QdrantClient(host=host, port=int(port))
 
-    producer, consumer = KafkaProducerConsumerFactory.create_producer_consumer(
-        KAFKA_LISTEN_TOPICS,
-        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+    producer, consumer = KafkaFactory.create_producer_consumer(
+        KAFKA_TOPICS,
         group_id=GROUP_ID,
     )
 
-    await consumer.start()
-    await producer.start()
-
-    logger.info("Started Kafka consumer and producer")
-
     try:
-        await consume_messages(consumer, producer, qdrant_client)
+        async with consumer as consumer, producer as producer:
+            logger.info("Started Kafka consumer and producer")
+            await consume_messages(consumer, producer, qdrant_client)
     finally:
-        await consumer.stop()
-        await producer.stop()
+        logger.warning("Stopping consumer and producer")
 
 
 if __name__ == "__main__":

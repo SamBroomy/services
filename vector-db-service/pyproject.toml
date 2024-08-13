@@ -7,9 +7,6 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.12"
-result = "^0.17.0"
-openai = "^1.40.2"
-aiokafka = "^0.11.0"
 pydantic = "^2.8.2"
 qdrant-client = "^1.10.1"
 microservices-common = { path = "../common" }
