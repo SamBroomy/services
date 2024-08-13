@@ -81,6 +81,8 @@ class KafkaAIOFactory:
     ) -> AIOKafkaConsumer:
         if isinstance(topics, str):
             topic_names = [topics]
+        else:
+            topic_names = topics
 
         return AIOKafkaConsumer(
             *topic_names,

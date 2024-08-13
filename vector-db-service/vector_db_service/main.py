@@ -112,10 +112,12 @@ async def process_insert_request(
     logger.info(
         f"Uploading {len(points)} points to collection: {request.collection_name}"
     )
-    await client.upload_points(
+    # No async for some reason?
+    client.upload_points(
         collection_name=request.collection_name,
         points=points,
-        wait=True,
+        # Because no async we can't wait for the response as it will block the event loop
+        # wait=True,
     )
     logger.info("Uploaded points!")
     return VectorDBInsertResponse(status="success")
