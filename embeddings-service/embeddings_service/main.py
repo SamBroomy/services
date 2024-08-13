@@ -1,8 +1,6 @@
 import asyncio
-from typing import Dict, List, Literal, Protocol
 
-import openai
-import tiktoken
+from embeddings_service.embedding_models import EMBEDDING_MODELS
 from microservices_common import setup_logger
 from microservices_common.kafka import (
     KafkaConsumer,
@@ -18,7 +16,6 @@ from microservices_common.model_definitions.embeddings import (
     EmbeddingResponse,
     ModelInfoRequest,
     ModelInfoResponse,
-    Usage,
 )
 from pydantic import BaseModel
 
@@ -27,98 +24,6 @@ GROUP_ID = "embeddings-service"
 
 
 logger = setup_logger("embeddings-service")
-
-
-class EmbeddingModel(Protocol):
-    model: str
-    dimensions: int
-    max_tokens: int
-
-    async def generate_embedding(self, text: List[str]) -> EmbeddingResponse: ...
-
-    def model_info(self) -> ModelInfoResponse:
-        return ModelInfoResponse(
-            model=self.model, dimensions=self.dimensions, max_tokens=self.max_tokens
-        )
-
-
-class OpenAIEmbedding:
-    def __init__(
-        self,
-        model: Literal[
-            "text-embedding-3-small", "text-embedding-3-large", "text-embedding-ada-002"
-        ],
-        dimensions: int,
-    ):
-        # Deployment and model name are not normally the same, but at the moment the deployment names are the same as the model names. This may change in the future.
-        self.client = openai.AzureOpenAI(azure_deployment=model)
-        self.model = model
-        self.max_tokens = 8192
-        self.dimensions = dimensions
-        self.tokenizer = tiktoken.get_encoding("cl100k_base")
-
-    async def generate_embedding(self, text: List[str]) -> EmbeddingResponse:
-        for i, t in enumerate(text):
-            if len(self.tokenizer.encode(t)) > self.max_tokens:
-                raise ValueError(
-                    f"Text in index {i} is too long for model {self.model}. Received {len(self.tokenizer.encode(t))} tokens, max tokens: {self.max_tokens}"
-                )
-
-        response = self.client.embeddings.create(input=text, model=self.model)
-        logger.debug("Model: '%s', Usage: %s", self.model, response.usage)
-
-        embeddings = [d.embedding for d in response.data]
-
-        usage = Usage(
-            prompt_tokens=response.usage.prompt_tokens,
-            total_tokens=response.usage.total_tokens,
-        )
-
-        return EmbeddingResponse(
-            embeddings=embeddings,
-            model=response.model,
-            dimensions=self.dimensions,
-            usage=usage,
-        )
-
-    def model_info(self) -> ModelInfoResponse:
-        return ModelInfoResponse(
-            model=self.model, dimensions=self.dimensions, max_tokens=self.max_tokens
-        )
-
-
-class DummyEmbedding:
-    def __init__(self):
-        self.model = "dummy"
-        self.dimensions = 100
-        self.max_tokens = 69
-
-    async def generate_embedding(self, text: List[str]) -> EmbeddingResponse:
-        # This is a dummy model that returns random embeddings
-        import random
-
-        return EmbeddingResponse(
-            embeddings=[
-                [random.random() for _ in range(self.dimensions)] for _ in text
-            ],
-            model="dummy",
-            dimensions=self.dimensions,
-            usage=Usage(prompt_tokens=0, total_tokens=0),
-        )
-
-    def model_info(self) -> ModelInfoResponse:
-        return ModelInfoResponse(
-            model=self.model, dimensions=self.dimensions, max_tokens=self.max_tokens
-        )
-
-
-EMBEDDING_MODELS: Dict[str, EmbeddingModel] = {
-    "text-embedding-ada-002": OpenAIEmbedding("text-embedding-ada-002", 1_536),
-    #'text-embedding-3-small': OpenAIEmbedding('text-embedding-3-small', 1_536),
-    "text-embedding-3-large": OpenAIEmbedding("text-embedding-3-large", 3_072),
-    "dummy": DummyEmbedding(),
-    # Add more models here as they are implemented
-}
 
 
 async def process_embedding_request(
@@ -150,13 +55,15 @@ async def handle_message(
     if isinstance(message, BaseModel):
         message = message.model_dump()
 
+    logger.debug(f"Message: {message}")
+
     match msg.topic:
         case KafkaTopic.EMBEDDING_GENERATE:
-            logger.info(f"Processing embedding request: {message}")
+            logger.info("Processing embedding request")
             request = EmbeddingRequest(**message)
             return await process_embedding_request(request)
         case KafkaTopic.EMBEDDING_MODEL_INFO:
-            logger.info(f"Processing model info request: {message}")
+            logger.info("Processing model info request")
             request = ModelInfoRequest(**message)
             return process_model_info_request(request)
         case _:
@@ -178,7 +85,7 @@ async def process_message(msg: KafkaMessage, producer: KafkaProducer):
         err_message = KafkaMessage(
             topic=msg.topic, value=response, key=msg.key, headers=msg.headers
         )
-        await producer.send_response(err_message)
+        await producer.send_error(err_message)
     logger.info("Response sent")
 
 
@@ -196,7 +103,7 @@ async def main():
     )
 
     try:
-        async with consumer as consumer, producer as producer:
+        async with consumer, producer:
             logger.info("Started Kafka consumer and producer")
             await consume_messages(consumer, producer)
     finally:
