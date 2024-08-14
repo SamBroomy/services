@@ -8,6 +8,7 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = "^3.12"
 microservices-common = { path = "common" }
+document-service = { path = "document-service" }
 embeddings-service = { path = "embeddings-service" }
 vector-db-service = { path = "vector-db-service" }
 
