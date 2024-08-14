@@ -23,7 +23,6 @@ services:
       context: ..
       dockerfile: vector-db-service/Dockerfile
     container_name: vector-db-service
-    image: kafka-vector-db-service
     #restart: unless-stopped
     depends_on:
       - qdrant

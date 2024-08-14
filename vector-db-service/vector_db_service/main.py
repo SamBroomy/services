@@ -1,12 +1,11 @@
 import asyncio
 import os
+from functools import partial
 
 from microservices_common import setup_logger
 from microservices_common.kafka import (
-    KafkaConsumer,
     KafkaFactory,
     KafkaMessage,
-    KafkaProducer,
     KafkaTopic,
     KafkaTopicCategory,
 )
@@ -16,7 +15,6 @@ from microservices_common.model_definitions.embeddings import (
     ModelInfoRequest,
     ModelInfoResponse,
 )
-from microservices_common.model_definitions.error import Error
 from microservices_common.model_definitions.vector_db import (
     SearchResults,
     VectorDBInsertRequest,
@@ -28,6 +26,9 @@ from pydantic import BaseModel
 from qdrant_client import AsyncQdrantClient as QdrantClient
 from qdrant_client import models
 from qdrant_client.http.models import PointStruct
+
+# TODO: Interface with Qdrant thats general enough to be used in other services
+# That way we can swap out the QdrantClient for a different client if needed
 
 # Kafka configuration
 KAFKA_TOPICS = KafkaTopicCategory.VECTOR_DB
@@ -104,6 +105,7 @@ async def process_insert_request(
             EmbeddingRequest(text=text, model=request.model)
         )
         request.update_embeddings(embeddings.embeddings)
+        logger.info(f"Updated embeddings: {request.data}")
 
     points = [
         PointStruct(**d.model_dump(by_alias=True, exclude={"field_to_embed"}))
@@ -170,7 +172,7 @@ async def process_search_request(
 async def handle_message(
     msg: KafkaMessage,
     qdrant_client: QdrantClient,
-) -> VectorDBInsertResponse | VectorDBSearchResponse:
+) -> KafkaMessage:
     if (message := msg.value) is None:
         raise ValueError("Message does not contain a value, cannot process")
     if isinstance(message, BaseModel):
@@ -180,45 +182,17 @@ async def handle_message(
         case KafkaTopic.VECTOR_DB_INSERT:
             logger.info(f"Processing insert request: {message}")
             request = VectorDBInsertRequest(**message)
-            return await process_insert_request(request, qdrant_client)
+            response = await process_insert_request(request, qdrant_client)
         case KafkaTopic.VECTOR_DB_SEARCH:
             logger.info(f"Processing search request: {message}")
             request = VectorDBSearchRequest(**message)
-            return await process_search_request(request, qdrant_client)
+            response = await process_search_request(request, qdrant_client)
         case _:
             raise ValueError(f"Unknown topic: {msg.topic}")
-
-
-async def process_message(
-    msg: KafkaMessage, producer: KafkaProducer, qdrant_client: QdrantClient
-):
-    try:
-        response = await handle_message(msg, qdrant_client)
-        logger.info(f"Processed message: {response}")
-        message = KafkaMessage(
-            topic=msg.topic, value=response, key=msg.key, headers=msg.headers
-        )
-        logger.info(f"Sending response: {message}")
-        await producer.send_response(message)
-    except Exception as e:
-        logger.error(f"Error processing message: {e}")
-        response = Error(error=str(e), original_request=msg)
-        err_message = KafkaMessage(
-            topic=msg.topic, value=response, key=msg.key, headers=msg.headers
-        )
-        await producer.send_response(err_message)
-    logger.info("Response sent")
-
-
-async def consume_messages(
-    consumer: KafkaConsumer, producer: KafkaProducer, qdrant_client: QdrantClient
-):
-    async for msg in consumer:
-        logger.info(f"Received message: {msg}")
-
-        asyncio.create_task(
-            process_message(msg, producer, qdrant_client), name="process_message"
-        )
+    logger.info(f"Processed_message: {response}")
+    return KafkaMessage.model_construct(
+        topic=msg.topic, value=response, key=msg.key, headers=msg.headers
+    )
 
 
 async def main():
@@ -226,17 +200,14 @@ async def main():
     (host, port) = QDRANT_HOST.split(":")
     qdrant_client = QdrantClient(host=host, port=int(port))
 
-    producer, consumer = KafkaFactory.create_producer_consumer(
+    kafka = KafkaFactory.create_kafka_pc(
         KAFKA_TOPICS,
         group_id=GROUP_ID,
     )
 
-    try:
-        async with consumer as consumer, producer as producer:
-            logger.info("Started Kafka consumer and producer")
-            await consume_messages(consumer, producer, qdrant_client)
-    finally:
-        logger.warning("Stopping consumer and producer")
+    message_handler = partial(handle_message, qdrant_client=qdrant_client)
+
+    await kafka.run(message_handler)
 
 
 if __name__ == "__main__":
