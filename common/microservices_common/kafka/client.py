@@ -1,5 +1,6 @@
 import asyncio
-from typing import Dict, List, Union
+import os
+from typing import Awaitable, Callable, Dict, List, Union
 from uuid import UUID
 from uuid import uuid4 as uuid
 
@@ -9,13 +10,15 @@ from pydantic import (
 
 from microservices_common.kafka.aio_factory import KafkaAIOFactory
 from microservices_common.kafka.config import KafkaConfig
-from microservices_common.kafka.factory import KafkaFactory
 from microservices_common.kafka.message import KafkaMessage
 from microservices_common.kafka.topics import (
     KafkaTopic,
     KafkaTopicCategory,
 )
 from microservices_common.logging import setup_logger
+from microservices_common.model_definitions import Error
+
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 
 
 class KafkaProducer:
@@ -127,6 +130,56 @@ class KafkaConsumer:
         )
 
 
+message_handler = Callable[[KafkaMessage], Awaitable[KafkaMessage]]
+
+
+class KafkaPC:
+    def __init__(self, producer: KafkaProducer, consumer: KafkaConsumer):
+        self.producer = producer
+        self.consumer = consumer
+        self.logger = setup_logger("kafka-pc")
+
+    async def process_message(
+        self,
+        msg: KafkaMessage,
+        message_handler: Callable[[KafkaMessage], Awaitable[KafkaMessage]],
+    ):
+        try:
+            response = await message_handler(msg)
+            self.logger.info(f"Sending response: {response}")
+            await self.producer.send_response(response)
+        except Exception as e:
+            self.logger.error(f"Error processing message: {e}", stack_info=True)
+            response = Error(error=str(e), original_request=msg)
+            err_message = KafkaMessage(
+                topic=msg.topic, value=response, key=msg.key, headers=msg.headers
+            )
+            await self.producer.send_error(err_message)
+        self.logger.info("Response sent")
+
+    async def consume_messages(
+        self,
+        message_handler: Callable[[KafkaMessage], Awaitable[KafkaMessage]],
+    ):
+        async for msg in self.consumer:
+            self.logger.info(f"Received message, creating task: {msg.topic}")
+            asyncio.create_task(
+                self.process_message(msg, message_handler),
+                name="process_message",
+            )
+
+    async def run(
+        self,
+        message_handler: Callable[[KafkaMessage], Awaitable[KafkaMessage]],
+    ):
+        try:
+            async with self.consumer, self.producer:
+                self.logger.info("Started Kafka PC")
+                await self.consume_messages(message_handler)
+        finally:
+            self.logger.warning("Stopping Kafka PC")
+
+
 class KafkaOneShot:
     """A class to send a message and wait for a response, used when you need to send a message and get a response from another service"""
 
@@ -188,3 +241,69 @@ class KafkaOneShot:
             raise TimeoutError(
                 f"Request to {kafka_message.topic} timed out after {timeout} seconds"
             )
+
+
+class KafkaFactory:
+    @staticmethod
+    def create_producer() -> KafkaProducer:
+        return KafkaProducer()
+
+    @staticmethod
+    def create_consumer(
+        topics: Union[
+            KafkaTopic,
+            List[KafkaTopic],
+            KafkaTopicCategory | List[KafkaTopicCategory] | str | List[str],
+        ],
+        group_id: str,
+    ) -> KafkaConsumer:
+        return KafkaConsumer(topics, group_id=group_id)
+
+    @classmethod
+    def create_producer_consumer(
+        cls,
+        topics: Union[
+            KafkaTopic,
+            List[KafkaTopic],
+            KafkaTopicCategory | List[KafkaTopicCategory] | str | List[str],
+        ],
+        group_id: str,
+    ) -> tuple[KafkaProducer, KafkaConsumer]:
+        """Create a producer and a consumer for the given topics and group_id"""
+        return cls.create_producer(), cls.create_consumer(topics, group_id=group_id)
+
+    @classmethod
+    def create_producer_response_consumer(
+        cls,
+        topics: KafkaTopic,
+        group_id: str,
+    ) -> tuple[KafkaProducer, KafkaConsumer]:
+        """Create a producer and a consumer that listens to the response topic of the given topic"""
+        response_topic = KafkaConfig.get_response_topic(topics)
+        return cls.create_producer(), cls.create_consumer(
+            response_topic, group_id=group_id
+        )
+
+    @classmethod
+    def create_kafka_pc(
+        cls,
+        topics: Union[
+            KafkaTopic,
+            List[KafkaTopic],
+            KafkaTopicCategory | List[KafkaTopicCategory] | str | List[str],
+        ],
+        group_id: str,
+    ) -> KafkaPC:
+        producer, consumer = cls.create_producer_consumer(topics, group_id)
+        return KafkaPC(producer, consumer)
+
+    @classmethod
+    def create_one_shot(
+        cls,
+        topic: KafkaTopic,
+        group_id: str,
+    ) -> KafkaOneShot:
+        return KafkaOneShot(topic, group_id)
+
+
+__all__ = ["KafkaFactory"]

@@ -1,6 +1,5 @@
 from typing import Any, List, Literal, Optional, Self
 from uuid import UUID
-from uuid import uuid4 as uuid
 
 from pydantic import (
     BaseModel,
@@ -10,6 +9,9 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+# from uuid import uuid4 as uuid
+from uuid_extensions import uuid7 as uuid
 
 
 class InsertData(BaseModel):

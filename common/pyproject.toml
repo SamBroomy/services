@@ -8,6 +8,7 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.12"
+uuid7 = "^0.1.0"
 pydantic = "^2.8"
 aiokafka = "^0.11"
 

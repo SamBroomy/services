@@ -10,6 +10,9 @@ from pydantic import (
     field_validator,
 )
 
+# from uuid import uuid4 as uuid
+from uuid_extensions import uuid7 as uuid
+
 from microservices_common.kafka.config import KafkaConfig
 from microservices_common.kafka.topics import (
     KafkaTopic,
@@ -29,7 +32,7 @@ class KafkaMessage(BaseModel):
         description="The message value to send. Can be a `BaseModel` or a dictionary. Need at least a value or a key.",
     )
     key: Optional[str | int | UUID] = Field(
-        None,
+        default_factory=uuid,
         # alias="message_key",
         title="Message key",
         description="The message key to send. Can be a string, int or UUID. Need at least a value or a key.",
