@@ -1,0 +1,21 @@
+
+services:
+  unstructured-api:
+    hostname: unstructured
+    image: downloads.unstructured.io/unstructured-io/unstructured-api:latest
+    ports:
+      - "8000:8000"
+    command: [ "--port", "8000", "--host", "0.0.0.0" ]
+    container_name: unstructured-api
+    restart: unless-stopped
+
+  document_service:
+    build:
+      context: ..
+      dockerfile: document-service/Dockerfile
+    container_name: document-service-1
+    #restart: unless-stopped
+    depends_on:
+      - unstructured-api
+    environment:
+      UNSTRUCTURED_HOST: unstructured:8000

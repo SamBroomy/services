@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "document-service"
+version = "0.1.0"
+description = "Document services like parsing and chunking"
+authors = ["Sam Broomfield"]
+readme = "README.md"
+
+
+[tool.poetry.dependencies]
+python = "^3.12"
+unstructured-client = "^0.25"
+microservices-common = { path = "../common" }
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
