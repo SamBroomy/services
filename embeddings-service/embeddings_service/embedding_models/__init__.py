@@ -1,11 +1,12 @@
 from typing import List, Protocol
 
-from embeddings_service.embedding_models.dummy import DummyEmbedding
-from embeddings_service.embedding_models.oai import OpenAIEmbedding
 from microservices_common.model_definitions.embeddings import (
     EmbeddingResponse,
     ModelInfoResponse,
 )
+
+from embedding_models.dummy import DummyEmbedding
+from embedding_models.oai import OpenAIEmbedding
 
 
 class EmbeddingModel(Protocol):

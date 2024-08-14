@@ -1,4 +1,5 @@
-FROM python:3.12-slim AS python-base
+#FROM python:3.12-slim AS python-base
+FROM python:3.12 AS python-base
 
 
 # Set environment variables for Python, Pip, Poetry and project directories
@@ -15,15 +16,17 @@ ENV PYTHONUNBUFFERED=1 \
 # Add Poetry to the PATH
 ENV PATH="$POETRY_HOME/bin:$PROJECT_DIR/.venv/bin:$PATH"
 
-FROM python-base AS production
 
 # Install system dependencies
-RUN buildDeps="build-essential" \
-    && apt-get update \
-    && apt-get install --no-install-recommends -y \
-    curl \
-    && apt-get install -y --no-install-recommends $buildDeps \
-    && rm -rf /var/lib/apt/lists/*
+# RUN buildDeps="build-essential" \
+#     && apt-get update \
+#     && apt-get install --no-install-recommends -y \
+#     curl \
+#     libsnappy-dev \
+#     && apt-get install -y --no-install-recommends $buildDeps \
+#     && rm -rf /var/lib/apt/lists/*
+
+FROM python-base AS production
 
 # Set Poetry and uv versions
 ENV POETRY_VERSION=1.8.3

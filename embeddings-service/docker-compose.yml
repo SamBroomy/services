@@ -46,14 +46,15 @@ services:
     build:
       context: ..
       dockerfile: embeddings-service/Dockerfile
+
     #image: kafka-embedding-service
     #restart: unless-stopped
     env_file:
-      - .env
+      - ../.env
     # ports:
     #   - "8000:8000"
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
-    depends_on:
-      kafka:
-        condition: service_healthy
+    # depends_on:
+    #   kafka:
+    #     condition: service_healthy
