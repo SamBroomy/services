@@ -9,6 +9,7 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = "^3.12"
 unstructured-client = "^0.25"
+unstructured = { version = "^0.15", python = ">=3.12,<3.13" }
 microservices-common = { path = "../common" }
 
 
