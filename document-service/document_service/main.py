@@ -1,5 +1,7 @@
 import asyncio
 import codecs
+import hashlib
+import io
 import os
 import pprint
 import re
@@ -47,6 +49,7 @@ BASE_URL = "http://{server_url}/general/v0/general"
 DEFAULT_PARAMETERS = {
     "strategy": "auto",
     "languages": ["eng"],
+    "unique_element_ids": True,
 }
 
 logger = setup_logger("document-service")
@@ -226,17 +229,33 @@ def remove_section_headings(elements: list[Element]) -> list[Element]:
     return elements
 
 
+def hash_file(f: bytes) -> str:
+    return hashlib.file_digest(io.BytesIO(f), "sha256").hexdigest()
+
+
+def get_document_content(filename: str, _file_id: Optional[str]) -> bytes:
+    # /code/document_service/test.pdf
+
+    # TODO: Some other logic to get the file content from some form of blob storage.
+
+    with open(filename, "rb") as f:
+        return f.read()
+
+
 def process_document(
     document: Document,
     parameters: dict[str, Any],
     chunking_parameters: Optional[ChunkingParams],
     client: UnstructuredClient,
 ) -> ParsedDocument:
+    file_content = get_document_content(document.filename, document.file_id)
+    file_hash = hash_file(file_content)
+
     try:
         request = operations.PartitionRequest(
             partition_parameters=shared.PartitionParameters(
                 files=shared.Files(
-                    content=document.file_content,
+                    content=file_content,
                     file_name=str(document.filename),
                 ),
                 **parameters,
@@ -269,7 +288,7 @@ def process_document(
         return ParsedDocument(
             **{
                 "filename": document.filename,
-                "file_hash": document.file_hash,
+                "file_hash": file_hash,
                 "chunks": [e.to_dict() for e in elements],
                 "parameters": parameters,
                 "chunking_parameters": chunking_parameters,
@@ -279,7 +298,7 @@ def process_document(
     except Exception:
         logger.exception("Failed to process document", exc_info=True)
         return ParsedDocument(
-            filename=document.filename, file_hash=document.file_hash, chunks=None
+            filename=document.filename, file_hash=file_hash, chunks=None
         )
 
 
@@ -342,6 +361,7 @@ async def handle_message(
 
 async def main():
     logger.warning("Starting document-service")
+    logger.info(f"{CURRENT_DIR / 'test.pdf'}")
     client = UnstructuredClient(
         server_url=BASE_URL.format(
             server_url=os.getenv("UNSTRUCTURED_HOST", "localhost:8000")
@@ -365,6 +385,7 @@ async def example():
         )
     )
     filename = CURRENT_DIR / "test.pdf"
+
     try:
         req = DocumentParseRequest(
             documents=[
