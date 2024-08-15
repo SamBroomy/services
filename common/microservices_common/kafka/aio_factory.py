@@ -23,12 +23,16 @@ def _custom_key_serializer(k: Optional[str | int | UUID]) -> Optional[bytes]:
     return str(k).encode("utf-8")
 
 
-def _custom_value_serializer(v: Optional[dict | BaseModel]) -> Optional[bytes]:
+def _custom_value_serializer(v: Optional[dict | BaseModel | str]) -> Optional[bytes]:
     if v is None:
         return None
     if isinstance(v, BaseModel):
         return v.model_dump_json().encode("utf-8")
-    return json.dumps(v).encode("utf-8")
+    try:
+        return json.dumps(v).encode("utf-8")
+    except json.JSONDecodeError as e:
+        logger.exception(f"Error serializing value: {v} - {e}")
+        return str(v).encode("utf-8")
 
 
 def _custom_key_deserializer(k: Optional[bytes]) -> Optional[str | int | UUID]:
@@ -44,13 +48,14 @@ def _custom_key_deserializer(k: Optional[bytes]) -> Optional[str | int | UUID]:
             return key
 
 
-def _custom_value_deserializer(v: Optional[bytes]) -> Optional[dict]:
+def _custom_value_deserializer(v: Optional[bytes]) -> Optional[dict | str]:
+    if v is None:
+        return None
     try:
-        return json.loads(v.decode("utf-8")) if v is not None else None
+        return json.loads(v.decode("utf-8"))
     except json.JSONDecodeError as e:
-        logger.error(f"Error deserializing value: {v}")
-        # TODO: Raise a custom exception
-        raise e
+        logger.exception(f"Error deserializing value: {v} - {e}")
+        return v.decode("utf-8")
 
 
 class KafkaAIOFactory:

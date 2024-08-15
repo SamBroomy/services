@@ -5,7 +5,7 @@ from microservices_common.kafka.topics import KafkaTopic, KafkaTopicCategory
 
 
 class KafkaConfig:
-    TOPIC_PREFIX = os.getenv("KAFKA_TOPIC_PREFIX", "micro")
+    TOPIC_PREFIX = os.getenv("KAFKA_TOPIC_PREFIX", "SERVICE")
 
     @classmethod
     def get_topic(cls, topic: KafkaTopic) -> str:

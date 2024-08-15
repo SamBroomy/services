@@ -25,6 +25,7 @@ class KafkaTopicCategory(Enum):
 class KafkaTopic(Enum):
     # Orchestration topics
     ORCHESTRATION = ("orchestration", None)
+    ORCHESTRATION_UPLOAD_AND_SEARCH = ("orchestration", "upload_and_search")
 
     # Document topics
     DOCUMENT_PARSE = ("document", "parse")

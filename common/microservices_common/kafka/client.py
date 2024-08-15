@@ -1,5 +1,6 @@
 import asyncio
 import os
+import traceback
 from typing import Awaitable, Callable, Dict, List, Union
 from uuid import UUID
 from uuid import uuid4 as uuid
@@ -148,9 +149,10 @@ class KafkaPC:
             response = await message_handler(msg)
             self.logger.info(f"Sending response: {response}")
             await self.producer.send_response(response)
-        except Exception as e:
-            self.logger.error(f"Error processing message: {e}", stack_info=True)
-            response = Error(error=str(e), original_request=msg)
+        except Exception:
+            self.logger.exception(f"Error processing message: {msg}")
+            full_traceback = traceback.format_exc()
+            response = Error(error=full_traceback, original_request=msg)
             err_message = KafkaMessage(
                 topic=msg.topic, value=response, key=msg.key, headers=msg.headers
             )

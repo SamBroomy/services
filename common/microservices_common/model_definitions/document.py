@@ -1,5 +1,3 @@
-import hashlib
-import io
 import logging
 from typing import Any, ClassVar, Literal, Optional, Self
 
@@ -63,31 +61,9 @@ class ChunkingParams(BaseModel):
 
 class Document(BaseModel):
     filename: str
-    file_content: bytes
-    file_hash: str
+    file_id: Optional[str] = None
     parameters: Optional[dict[str, Any]] = None
     chunking_parameters: Optional[ChunkingParams] = None
-
-    @model_validator(mode="before")
-    def set_file_hash(cls, values: dict[str, Any]) -> dict[str, Any]:
-        if "file_content" not in values:
-            try:
-                with open(values["filename"], "rb") as f:
-                    values["file_content"] = f.read()
-            except FileNotFoundError:
-                raise ValueError(
-                    f"No file content provided and file not found: {values['filename']}"
-                )
-
-        if "file_content" in values and "file_hash" not in values:
-            values["file_hash"] = cls.hash_file(values["file_content"])
-        else:
-            raise ValueError("No file content provided and unable to calculate hash")
-        return values
-
-    @staticmethod
-    def hash_file(f: bytes) -> str:
-        return hashlib.file_digest(io.BytesIO(f), "sha256").hexdigest()
 
 
 class DocumentParseRequest(BaseModel):
