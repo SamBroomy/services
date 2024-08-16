@@ -1,0 +1,9 @@
+services:
+  unstructured-api:
+    hostname: unstructured
+    image: downloads.unstructured.io/unstructured-io/unstructured-api:latest
+    ports:
+      - "8000:8000"
+    command: ["--port", "8000", "--host", "0.0.0.0"]
+    #container_name: unstructured-api
+    restart: unless-stopped
