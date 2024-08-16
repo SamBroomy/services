@@ -1,0 +1,28 @@
+
+FROM services/python-base:latest AS base
+
+# SERVICE_NAME: document-service
+# SERVICE_DIR: document_service
+ARG SERVICE_NAME
+ENV SERVICE_NAME=${SERVICE_NAME}
+ARG SERVICE_DIR
+ENV SERVICE_DIR=${SERVICE_DIR}
+
+# Set working directory
+WORKDIR ${PROJECT_DIR}
+# Install package dependencies with uv
+COPY ${SERVICE_NAME}/pyproject.toml ./
+
+RUN poetry export -f requirements.txt --output requirements.txt
+RUN poetry run uv pip install -r requirements.txt
+
+# Conditional execution based on SERVICE_DIR
+RUN if [ "${SERVICE_NAME}" = "embeddings-service" ]; then \
+    poetry run python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"; \
+    fi
+
+COPY ./${SERVICE_NAME}/${SERVICE_DIR}/ ./${SERVICE_DIR}/
+
+WORKDIR ${SERVICE_DIR}
+
+CMD [ "poetry", "run", "python", "main.py" ]

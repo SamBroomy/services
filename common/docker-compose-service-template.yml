@@ -1,0 +1,19 @@
+include:
+  - docker-compose-kafak.yml
+
+services:
+  base-service:
+    build:
+      context: ..
+      dockerfile: common/Dockerfile.service
+    restart: unless-stopped
+    depends_on:
+      - redpanda-0
+      - kafka-ui
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: redpanda-0:9092
+    # develop:
+    #   watch:
+    #     - action: rebuild
+    #       path: .
+    #       target: /code
