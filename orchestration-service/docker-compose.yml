@@ -1,0 +1,13 @@
+include:
+  - ../common/docker-compose-kafka.yml
+
+
+services:
+  orchestration:
+    extends:
+      file: ../common/docker-compose-service-template.yml
+      service: base-service
+    build:
+      args:
+        SERVICE_NAME: orchestration-service
+        SERVICE_DIR: orchestration_service

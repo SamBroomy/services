@@ -1,0 +1,15 @@
+FROM services/python-base:latest AS base
+
+# Set working directory
+WORKDIR $PROJECT_DIR
+
+# Install package dependencies with uv
+COPY orchestration-service/pyproject.toml ./
+
+RUN poetry export -f requirements.txt --output requirements.txt
+RUN poetry run uv pip install -r requirements.txt
+
+
+COPY orchestration-service/orchestration_service/ ./orchestration_service/
+
+CMD ["poetry", "run", "python", "orchestration_service/main.py"]
