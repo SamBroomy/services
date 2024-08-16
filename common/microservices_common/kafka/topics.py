@@ -22,6 +22,18 @@ class KafkaTopicCategory(Enum):
     #     return self.value
 
 
+class TopicResponseType(Enum):
+    RESPONSE = "response"
+    ERROR = "error"
+
+    @classmethod
+    def from_string(cls, s: str) -> "TopicResponseType":
+        for topic_type in cls:
+            if topic_type.value == s:
+                return topic_type
+        raise ValueError(f"No TopicType found for '{s}'")
+
+
 class KafkaTopic(Enum):
     # Orchestration topics
     ORCHESTRATION = ("orchestration", None)
@@ -51,11 +63,10 @@ class KafkaTopic(Enum):
         self,
         category: str,
         operation: Optional[str],
-        # response: Optional[Literal["response", "error"]] = None,
     ):
         self.category = KafkaTopicCategory(category)
         self.operation = operation
-        # self.response = response
+        self.response: Optional[TopicResponseType] = None
 
     @classmethod
     def from_string(cls, s: str) -> "KafkaTopic":
@@ -67,13 +78,29 @@ class KafkaTopic(Enum):
 
         category = parts[1]
         operation = parts[2] if len(parts) >= 3 else None
-        # response_or_error = parts[-1] if parts[-1] in ["response", "error"] else None
+        response_or_error = (
+            TopicResponseType.from_string(parts[-1])
+            if parts[-1] in ["response", "error"]
+            else None
+        )
 
         for topic in cls:
             if topic.category.value == category and topic.operation == operation:
-                return KafkaTopic(category, operation)
+                output = KafkaTopic(category, operation)
+                output.response = response_or_error
+                return output
 
         raise ValueError(f"No KafkaTopic found for '{s}'")
+
+    def is_error(self) -> bool:
+        if self.response is None:
+            return False
+        return self.response == TopicResponseType.ERROR
+
+    def is_response(self) -> bool:
+        if self.response is None:
+            return False
+        return self.response == TopicResponseType.RESPONSE
 
     # def __str__(self) -> str:
     #     if self.operation:

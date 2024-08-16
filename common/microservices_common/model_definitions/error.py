@@ -1,10 +1,18 @@
-from aiokafka import ConsumerRecord
+from typing import Any, Optional, Self
+
 from pydantic import BaseModel
 
-
-class Error(BaseModel):
-    error: str
-    original_request: dict | BaseModel | ConsumerRecord
+from microservices_common.kafka.message import KafkaMessage
 
 
-__all__ = ["Error"]
+class ServiceError(BaseModel):
+    error: str | KafkaMessage | Self | dict[str, Any] | BaseModel | None
+    traceback: Optional[str] = None
+    original_request: dict | KafkaMessage
+
+
+class OneShotError(Exception):
+    error: KafkaMessage
+
+
+__all__ = ["ServiceError", "OneShotError"]

@@ -1,7 +1,7 @@
 import asyncio
 import os
 import traceback
-from typing import Awaitable, Callable, Dict, List, Union
+from typing import Awaitable, Callable, Dict, List, Optional, Union
 from uuid import UUID
 from uuid import uuid4 as uuid
 
@@ -17,9 +17,9 @@ from microservices_common.kafka.topics import (
     KafkaTopicCategory,
 )
 from microservices_common.logging import setup_logger
-from microservices_common.model_definitions import Error
+from microservices_common.model_definitions.error import OneShotError, ServiceError
 
-KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "redpanda-0:9092")
 
 
 class KafkaProducer:
@@ -149,10 +149,12 @@ class KafkaPC:
             response = await message_handler(msg)
             self.logger.info(f"Sending response: {response}")
             await self.producer.send_response(response)
-        except Exception:
-            self.logger.exception(f"Error processing message: {msg}")
+        except Exception as e:
+            self.logger.exception(f"Error processing message: {msg} - {e}")
             full_traceback = traceback.format_exc()
-            response = Error(error=full_traceback, original_request=msg)
+            response = ServiceError(
+                error=str(e), traceback=full_traceback, original_request=msg
+            )
             err_message = KafkaMessage(
                 topic=msg.topic, value=response, key=msg.key, headers=msg.headers
             )
@@ -186,7 +188,7 @@ class KafkaOneShot:
     """A class to send a message and wait for a response, used when you need to send a message and get a response from another service"""
 
     def __init__(self, topic: KafkaTopic, group_id: str):
-        producer, consumer = KafkaFactory.create_producer_response_consumer(
+        producer, consumer = KafkaFactory.create_producer_response_error_consumer(
             topic, group_id
         )
         self.topic = topic
@@ -218,11 +220,21 @@ class KafkaOneShot:
     async def _consume_responses(self):
         async for msg in self.consumer:
             if msg.key in self.pending_requests:
-                self.logger.debug(f"Found pending request for key: {msg.key}")
-                self.pending_requests[msg.key].set_result(msg)
+                self.logger.info(
+                    f"Found pending request for key: {msg.key} - {msg.topic}"
+                )
+                if msg.topic.is_response():
+                    self.pending_requests[msg.key].set_result(msg)
+                elif msg.topic.is_error():
+                    self.pending_requests[msg.key].set_exception(OneShotError(msg))
+                else:
+                    self.logger.warning(f"Received unexpected message: {msg}")
+                    raise ValueError(f"Unexpected topic: {msg}")
                 del self.pending_requests[msg.key]
 
-    async def call(self, payload: BaseModel, timeout: float = 30.0) -> KafkaMessage:
+    async def call(
+        self, payload: BaseModel, timeout: Optional[float] = None
+    ) -> KafkaMessage:
         request_id = uuid()
         kafka_message = KafkaMessage(
             topic=self.topic,
@@ -237,12 +249,28 @@ class KafkaOneShot:
 
         try:
             return await asyncio.wait_for(future, timeout)
-        except asyncio.TimeoutError:
-            self.logger.error(f"Request to {kafka_message.topic} timed out")
+        except asyncio.TimeoutError | OneShotError as e:
             del self.pending_requests[request_id]
-            raise TimeoutError(
-                f"Request to {kafka_message.topic} timed out after {timeout} seconds"
-            )
+            if isinstance(e, OneShotError):
+                self.logger.error(
+                    f"Error received from error topic: Sent to {KafkaConfig.get_topic(self.topic)} -> {KafkaConfig.get_error_topic(self.topic)} :: {e.error}"
+                )
+                result = e.error
+            elif isinstance(e, asyncio.TimeoutError):
+                self.logger.error(
+                    f"Request to {KafkaConfig.get_topic(kafka_message.topic)} timed out"
+                )
+                result = KafkaMessage(
+                    topic=kafka_message.topic,
+                    value=ServiceError(
+                        error="Request timed out", original_request=kafka_message
+                    ),
+                    key=kafka_message.key,
+                )
+            else:
+                self.logger.exception(f"Error calling service: {e}")
+                raise OneShotError(e)
+            return result
 
 
 class KafkaFactory:
@@ -275,15 +303,16 @@ class KafkaFactory:
         return cls.create_producer(), cls.create_consumer(topics, group_id=group_id)
 
     @classmethod
-    def create_producer_response_consumer(
+    def create_producer_response_error_consumer(
         cls,
         topics: KafkaTopic,
         group_id: str,
     ) -> tuple[KafkaProducer, KafkaConsumer]:
         """Create a producer and a consumer that listens to the response topic of the given topic"""
         response_topic = KafkaConfig.get_response_topic(topics)
+        error_topic = KafkaConfig.get_error_topic(topics)
         return cls.create_producer(), cls.create_consumer(
-            response_topic, group_id=group_id
+            [response_topic, error_topic], group_id=group_id
         )
 
     @classmethod

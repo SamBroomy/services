@@ -14,13 +14,21 @@ class KafkaConfig:
             parts.append(topic.operation)
         return ".".join(parts)
 
+    @staticmethod
+    def get_response_suffix() -> str:
+        return ".response"
+
     @classmethod
     def get_response_topic(cls, topic: KafkaTopic) -> str:
-        return f"{cls.get_topic(topic)}.response"
+        return f"{cls.get_topic(topic)}{cls.get_response_suffix()}"
+
+    @staticmethod
+    def get_error_suffix() -> str:
+        return ".error"
 
     @classmethod
     def get_error_topic(cls, topic: KafkaTopic) -> str:
-        return f"{cls.get_topic(topic)}.error"
+        return f"{cls.get_topic(topic)}{cls.get_error_suffix()}"
 
     @classmethod
     def get_all_topics(cls) -> Dict[str, str]:
@@ -29,14 +37,15 @@ class KafkaConfig:
     @classmethod
     def get_all_response_topics(cls) -> Dict[str, str]:
         return {
-            f"{topic.name}_RESPONSE": cls.get_response_topic(topic)
+            f"{topic.name}{cls.get_response_suffix()}": cls.get_response_topic(topic)
             for topic in KafkaTopic
         }
 
     @classmethod
     def get_all_error_topics(cls) -> Dict[str, str]:
         return {
-            f"{topic.name}_ERROR": cls.get_error_topic(topic) for topic in KafkaTopic
+            f"{topic.name}{cls.get_error_suffix()}": cls.get_error_topic(topic)
+            for topic in KafkaTopic
         }
 
     @classmethod

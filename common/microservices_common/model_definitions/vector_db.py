@@ -86,7 +86,7 @@ class SearchData(BaseModel):
         None, alias="vector", description="Vector to search"
     )
 
-    @model_validator(mode="before")
+    @model_validator(mode="after")
     def validate_model(self) -> Self:
         if self.query is None and self.query_embeddings is None:
             raise ValueError("Either query or query_embeddings must be provided")
@@ -99,7 +99,7 @@ class VectorDBSearchRequest(BaseModel):
     filter: Optional[dict] = None
     params: Optional[dict] = None
     limit: int = 5
-    with_payload: Optional[List[str]] = None
+    with_payload: Optional[list[str]] = None
     with_vector: Optional[bool] = False
     score_threshold: Optional[float] = None
     model: str = "text-embedding-ada-002"
@@ -115,16 +115,16 @@ class VectorDBSearchRequest(BaseModel):
             d.query_embeddings = embeddings[i]
 
 
-class SearchResults(BaseModel):
+class SearchResult(BaseModel):
     id: str
     version: int
     score: float
-    payload: dict[str, Any]
+    payload: Optional[dict[str, Any]] = None
     vector: list[float] | None
 
 
 class VectorDBSearchResponse(BaseModel):
-    results: list[list[SearchResults]]
+    results: list[list[SearchResult]]
 
 
 __all__ = [
