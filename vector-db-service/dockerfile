@@ -1,47 +1,6 @@
-#FROM python:3.12-slim AS python-base
-FROM python:3.12 AS python-base
-
-
-# Set environment variables for Python, Pip, Poetry and project directories
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=off \
-    PIP_DISABLE_PIP_VERSION_CHECK=on \
-    PIP_DEFAULT_TIMEOUT=100 \
-    POETRY_HOME="/opt/poetry" \
-    POETRY_VIRTUALENVS_IN_PROJECT=true \
-    POETRY_NO_INTERACTION=1 \
-    PROJECT_DIR="/code"
-
-# Add Poetry to the PATH
-ENV PATH="$POETRY_HOME/bin:$PROJECT_DIR/.venv/bin:$PATH"
-
-
-# Install system dependencies
-# RUN buildDeps="build-essential" \
-#     && apt-get update \
-#     && apt-get install --no-install-recommends -y \
-#     curl \
-# .   libsnappy-dev \
-#     && apt-get install -y --no-install-recommends $buildDeps \
-#     && rm -rf /var/lib/apt/lists/*
-
-FROM python-base AS production
-
-# Set Poetry and uv versions
-ENV POETRY_VERSION=1.8.3
-ENV UV_VERSION=0.2.34
-
-# Install Poetry - respects $POETRY_VERSION & $POETRY_HOME
-RUN curl -sSL https://install.python-poetry.org | python3 - && chmod a+x /opt/poetry/bin/poetry
-RUN poetry self add poetry-plugin-export
-RUN pip install uv==$UV_VERSION
-
+FROM services/python-base:latest AS base
 # Set working directory
 WORKDIR $PROJECT_DIR
-
-# Copy the common components
-COPY ../common /common
 # Install package dependencies with uv
 COPY vector-db-service/pyproject.toml ./
 

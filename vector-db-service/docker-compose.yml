@@ -1,31 +1,23 @@
+include:
+  - infra.yml
+  - ../common/docker-compose-kafka.yml
+
+
 services:
-  qdrant:
-    image: qdrant/qdrant:latest
-    restart: always
-    container_name: qdrant
-    ports:
-      - 6333:6333
-      - 6334:6334
-    expose:
-      - 6333
-      - 6334
-      - 6335
-    # configs:
-    #   - source: qdrant_config
-    #     target: /qdrant/config/production.yaml
-    volumes:
-      - ./qdrant_data:/qdrant/storage
-
-
-
   vector_db_service:
+    extends:
+      file: ../common/docker-compose-service-template.yml
+      service: base-service
     build:
-      context: ..
-      dockerfile: vector-db-service/Dockerfile
-    container_name: vector-db-service
-    #restart: unless-stopped
+      args:
+        SERVICE_NAME: vector-db-service
+        SERVICE_DIR: vector_db_service
     depends_on:
       - qdrant
+    environment:
+      QDRANT_HOST: qdrant:6333
+
+
 
 # configs:
 #   qdrant_config:

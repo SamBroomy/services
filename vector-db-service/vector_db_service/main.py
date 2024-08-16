@@ -16,7 +16,7 @@ from microservices_common.model_definitions.embeddings import (
     ModelInfoResponse,
 )
 from microservices_common.model_definitions.vector_db import (
-    SearchResults,
+    SearchResult,
     VectorDBInsertRequest,
     VectorDBInsertResponse,
     VectorDBSearchRequest,
@@ -53,7 +53,7 @@ async def get_embedding(request: EmbeddingRequest) -> EmbeddingResponse:
         response = (
             await kafak_one_shot.call(
                 request,
-                timeout=5,
+                timeout=None,
             )
         ).value
         logger.info(f"Received response: {response}")
@@ -72,7 +72,7 @@ async def get_model_info(model: ModelInfoRequest) -> ModelInfoResponse:
         response = (
             await kafka_one_shot.call(
                 model,
-                timeout=5,
+                timeout=None,
             )
         ).value
         logger.info(f"Received response: {response}")
@@ -164,7 +164,25 @@ async def process_search_request(
         collection_name=request.collection_name,
         requests=search_requests,
     )
-    results = [[SearchResults.model_validate(r) for r in res] for res in results]
+    # output = []
+    # for res in results:
+    #     in_out = []
+    #     for r in res:
+    #         logger.info(f"Found result: {r}")
+    #         o = r.model_dump()
+    #         logger.info(f"Output: {o}")
+    #         in_out.append(
+    #             SearchResult(
+    #                 id=r.id,
+    #                 version=r.version,
+    #                 score=r.score,
+    #                 payload=r.payload,
+    #                 vector=r.vector,
+    #             )
+    #         )
+    #     output.append(in_out)
+
+    results = [[SearchResult(**r.model_dump()) for r in res] for res in results]
     logger.info(f"Found {len(results)} results")
     return VectorDBSearchResponse(results=results)
 
