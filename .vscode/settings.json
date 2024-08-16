@@ -1,3 +1,11 @@
 {
-    "python.analysis.typeCheckingMode": "basic"
+    "python.analysis.typeCheckingMode": "basic",
+    "python.analysis.extraPaths": [
+        "./common",
+        "./document-service",
+        "./embeddings-service",
+        "./vector-db-service",
+        "./*"
+    ],
+    "python.analysis.autoImportCompletions": true
 }
